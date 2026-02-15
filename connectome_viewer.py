@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -11,30 +12,6 @@ except ImportError:
     pd = None
 
 try:
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import (
-        QApplication,
-        QAbstractItemView,
-        QDialog,
-        QFileDialog,
-        QCheckBox,
-        QGroupBox,
-        QHBoxLayout,
-        QLabel,
-        QLineEdit,
-        QComboBox,
-        QListWidget,
-        QListWidgetItem,
-        QMainWindow,
-        QPushButton,
-        QSplitter,
-        QSpinBox,
-        QVBoxLayout,
-        QWidget,
-    )
-    from PyQt5.QtGui import QIcon
-    QT_LIB = 5
-except ImportError:
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import (
         QApplication,
@@ -58,6 +35,30 @@ except ImportError:
     )
     from PyQt6.QtGui import QIcon
     QT_LIB = 6
+except ImportError:
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QAbstractItemView,
+        QDialog,
+        QFileDialog,
+        QCheckBox,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QComboBox,
+        QListWidget,
+        QListWidgetItem,
+        QMainWindow,
+        QPushButton,
+        QSplitter,
+        QSpinBox,
+        QVBoxLayout,
+        QWidget,
+    )
+    from PyQt5.QtGui import QIcon
+    QT_LIB = 5
 
 try:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -66,8 +67,32 @@ except ImportError:
 from matplotlib.figure import Figure
 import matplotlib.transforms as mtransforms
 
-from graphplot.simmatrix import SimMatrixPlot
-from graphplot.colorbar import ColorBar
+from mrsitoolbox.graphplot.simmatrix import SimMatrixPlot
+from mrsitoolbox.graphplot.colorbar import ColorBar
+from mrsitoolbox.graphplot import colorbar as colorbar_module
+
+# Ensure Qt can locate platform plugins when installed via pip wheels.
+if QT_LIB == 6:
+    try:
+        import PyQt6
+
+        qt_plugins = Path(PyQt6.__file__).resolve().parent / "Qt6" / "plugins"
+        os.environ.setdefault("QT_PLUGIN_PATH", str(qt_plugins))
+        os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(qt_plugins / "platforms"))
+    except Exception:
+        pass
+else:
+    try:
+        import PyQt5
+
+        qt5_base = Path(PyQt5.__file__).resolve().parent
+        qt_plugins = qt5_base / "Qt5" / "plugins"
+        if not qt_plugins.exists():
+            qt_plugins = qt5_base / "Qt" / "plugins"
+        os.environ.setdefault("QT_PLUGIN_PATH", str(qt_plugins))
+        os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(qt_plugins / "platforms"))
+    except Exception:
+        pass
 
 DEFAULT_COLORMAP = "plasma"
 COLORMAPS = [
@@ -99,7 +124,7 @@ COLORBAR_BARS = [
 
 PARCEL_LABEL_KEYS = ("parcel_labels_group", "parcel_labels_group.npy")
 PARCEL_NAME_KEYS = ("parcel_names_group", "parcel_names_group.npy")
-CMAPS_DIR = Path(__file__).with_name("graphplot") / "cmaps"
+CMAPS_DIR = Path(colorbar_module.__file__).with_name("cmaps")
 
 if QT_LIB == 6:
     Qt.Horizontal = Qt.Orientation.Horizontal
@@ -468,6 +493,7 @@ class ConnectomeViewer(QMainWindow):
         self._current_axes = None
         self._colorbar = ColorBar()
         self._custom_cmaps = set()
+        self._last_gradients = None
         self.setWindowTitle("Connectome Viewer")
         self._set_window_icon()
         self.setAcceptDrops(True)
@@ -608,14 +634,24 @@ class ConnectomeViewer(QMainWindow):
         gradients_group = QGroupBox("Gradients")
         gradients_layout = QVBoxLayout(gradients_group)
         gradients_row = QHBoxLayout()
-        self.gradients_show_button = QPushButton("Show")
-        self.gradients_show_button.clicked.connect(self._show_gradients)
-        gradients_row.addWidget(self.gradients_show_button)
+        self.gradients_compute_button = QPushButton("Compute")
+        self.gradients_compute_button.clicked.connect(self._compute_gradients)
+        gradients_row.addWidget(self.gradients_compute_button)
+        self.gradients_render_button = QPushButton("Render 3D")
+        self.gradients_render_button.clicked.connect(self._render_gradients_3d)
+        self.gradients_render_button.setEnabled(False)
+        gradients_row.addWidget(self.gradients_render_button)
+        gradients_layout.addLayout(gradients_row)
+
+        gradients_label = QLabel("N components:")
+        gradients_layout.addWidget(gradients_label)
+
+        gradients_spin_row = QHBoxLayout()
         self.gradients_spin = QSpinBox()
         self.gradients_spin.setRange(1, 10)
         self.gradients_spin.setValue(4)
-        gradients_row.addWidget(self.gradients_spin)
-        gradients_layout.addLayout(gradients_row)
+        gradients_spin_row.addWidget(self.gradients_spin)
+        gradients_layout.addLayout(gradients_spin_row)
 
         group_style = (
             "QGroupBox {"
@@ -1159,6 +1195,8 @@ class ConnectomeViewer(QMainWindow):
         SimMatrixPlot.plot_simmatrix(matrix, ax=ax, titles=current_title, colormap=colormap)
         _remove_axes_border(ax)
         self._current_axes = ax
+        self._last_gradients = None
+        self.gradients_render_button.setEnabled(False)
         self.canvas.draw_idle()
         key_text = f", {key}" if key else ""
         self.statusBar().showMessage(f"Plotted {entry.get('label', 'matrix')}{key_text}.")
@@ -1331,7 +1369,7 @@ class ConnectomeViewer(QMainWindow):
         self.file_list.setCurrentItem(item)
         self.statusBar().showMessage("Added sample matrix to list.")
 
-    def _show_gradients(self) -> None:
+    def _compute_gradients(self) -> None:
         if self._current_matrix is None:
             self.statusBar().showMessage("No matrix selected for gradients.")
             return
@@ -1339,30 +1377,55 @@ class ConnectomeViewer(QMainWindow):
         if conn_matrix.ndim != 2 or conn_matrix.shape[0] != conn_matrix.shape[1]:
             self.statusBar().showMessage("Gradients require a square matrix.")
             return
-        if conn_matrix.shape[0] != 400:
-            self.statusBar().showMessage("Gradients require a 400x400 matrix (Schaefer scale=400).")
-            return
         try:
-            from brainspace.datasets import load_parcellation, load_conte69
             from brainspace.gradient import GradientMaps
-            from brainspace.utils.parcellation import map_to_labels
-            from brainspace.plotting import plot_hemispheres
         except Exception as exc:
             self.statusBar().showMessage(f"brainspace not available: {exc}")
             return
 
-        labeling = load_parcellation("schaefer", scale=400, join=True)
-        surf_lh, surf_rh = load_conte69()
-
-        gm = GradientMaps(n_components=10, random_state=0)
+        n_grad = self.gradients_spin.value()
+        gm = GradientMaps(n_components=n_grad, random_state=0)
         gm.fit(conn_matrix)
 
-        n_grad = self.gradients_spin.value()
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(1, figsize=(5, 4))
+        ax.scatter(range(gm.lambdas_.size), gm.lambdas_)
+        ax.set_xlabel("Component Nb")
+        ax.set_ylabel("Eigenvalue")
+        plt.show()
+
+        self._last_gradients = {
+            "gradients": gm.gradients_,
+            "n_grad": n_grad,
+            "n_nodes": conn_matrix.shape[0],
+        }
+        self.gradients_render_button.setEnabled(True)
+        self.statusBar().showMessage("Gradients computed. Click 'Render 3D' to display hemispheres.")
+
+    def _render_gradients_3d(self) -> None:
+        if not self._last_gradients:
+            self.statusBar().showMessage("No gradients computed yet.")
+            return
+        if self._last_gradients.get("n_nodes") != 400:
+            self.statusBar().showMessage("Render 3D currently requires 400 nodes (Schaefer scale=400).")
+            return
+        try:
+            from brainspace.datasets import load_parcellation, load_conte69
+            from brainspace.plotting import plot_hemispheres
+            from brainspace.utils.parcellation import map_to_labels
+        except Exception as exc:
+            self.statusBar().showMessage(f"brainspace plotting not available: {exc}")
+            return
+
+        surf_lh, surf_rh = load_conte69()
+        labeling = load_parcellation("schaefer", scale=400, join=True)
         mask = labeling != 0
+        gradients = self._last_gradients["gradients"]
+        n_grad = self._last_gradients["n_grad"]
         grad = [None] * n_grad
         for i in range(n_grad):
-            grad[i] = map_to_labels(gm.gradients_[:, i], labeling, mask=mask, fill=np.nan)
-
+            grad[i] = map_to_labels(gradients[:, i], labeling, mask=mask, fill=np.nan)
         label_text_list = [f"Grad{i}" for i in range(n_grad)]
         plot_hemispheres(
             surf_lh,
@@ -1374,14 +1437,6 @@ class ConnectomeViewer(QMainWindow):
             label_text=label_text_list,
             zoom=1.55,
         )
-
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots(1, figsize=(5, 4))
-        ax.scatter(range(gm.lambdas_.size), gm.lambdas_)
-        ax.set_xlabel("Component Nb")
-        ax.set_ylabel("Eigenvalue")
-        plt.show()
 
     def _clear_plot(self) -> None:
         self.figure.clear()
