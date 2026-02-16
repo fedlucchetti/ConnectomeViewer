@@ -2,6 +2,7 @@
 import math
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,7 @@ except ImportError:
     pd = None
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QSize
     from PyQt6.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -29,15 +30,16 @@ try:
         QMainWindow,
         QProgressBar,
         QPushButton,
+        QSplashScreen,
         QSplitter,
         QSpinBox,
         QVBoxLayout,
         QWidget,
     )
-    from PyQt6.QtGui import QIcon
+    from PyQt6.QtGui import QIcon, QFontMetrics, QPixmap, QColor
     QT_LIB = 6
 except ImportError:
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QSize
     from PyQt5.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -54,12 +56,13 @@ except ImportError:
         QMainWindow,
         QProgressBar,
         QPushButton,
+        QSplashScreen,
         QSplitter,
         QSpinBox,
         QVBoxLayout,
         QWidget,
     )
-    from PyQt5.QtGui import QIcon
+    from PyQt5.QtGui import QIcon, QFontMetrics, QPixmap, QColor
     QT_LIB = 5
 
 try:
@@ -137,6 +140,7 @@ if QT_LIB == 6:
     Qt.Vertical = Qt.Orientation.Vertical
     Qt.Checked = Qt.CheckState.Checked
     Qt.Unchecked = Qt.CheckState.Unchecked
+    Qt.ElideRight = Qt.TextElideMode.ElideRight
 
 
 def _user_role():
@@ -532,6 +536,10 @@ class ConnectomeViewer(QMainWindow):
         self._active_parcellation_data = None
         self._surface_dialog = None
         self._nbs_dialog = None
+        self._left_panel_saved_width = 320
+        self._right_panel_saved_width = 240
+        self._plot_title_full = ""
+        self._plot_title_tooltip = ""
         self.setWindowTitle("Connectome Viewer")
         self._set_window_icon()
         self.setAcceptDrops(True)
@@ -545,6 +553,13 @@ class ConnectomeViewer(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
+        screen = app.primaryScreen()
+        if screen is not None:
+            geom = screen.availableGeometry()
+            dpi = screen.logicalDotsPerInch()
+            if geom.width() <= 1600 or geom.height() <= 900 or dpi >= 120.0:
+                cls._global_font_adjusted = True
+                return
         font = app.font()
         if font.pointSize() > 0:
             font.setPointSize(font.pointSize() + 1)
@@ -556,15 +571,26 @@ class ConnectomeViewer(QMainWindow):
         cls._global_font_adjusted = True
 
     def _build_ui(self) -> None:
+        screen = QApplication.primaryScreen()
+        screen_geom = screen.availableGeometry() if screen is not None else None
+        screen_dpi = screen.logicalDotsPerInch() if screen is not None else 96.0
+        compact_ui = False
+        if screen_geom is not None:
+            compact_ui = screen_geom.width() <= 1600 or screen_geom.height() <= 900
+        compact_ui = compact_ui or screen_dpi >= 120.0
+
         central = QWidget(self)
         main_layout = QHBoxLayout(central)
+        if compact_ui:
+            main_layout.setContentsMargins(6, 6, 6, 6)
         self.main_splitter = QSplitter(Qt.Horizontal)
-        self.main_splitter.setHandleWidth(10)
-        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(8 if compact_ui else 10)
+        self.main_splitter.setChildrenCollapsible(True)
         main_layout.addWidget(self.main_splitter)
 
         left_panel = QWidget()
         controls_layout = QVBoxLayout(left_panel)
+        controls_layout.setSpacing(8 if compact_ui else 10)
 
         header = QLabel("Connectome matrices (.npz)")
         controls_layout.addWidget(header)
@@ -628,15 +654,8 @@ class ConnectomeViewer(QMainWindow):
         self.average_button.clicked.connect(self._average_selected)
         selector_layout.addWidget(self.average_button)
 
-        cmap_group = QGroupBox("Color map")
-        cmap_layout = QVBoxLayout(cmap_group)
-        cmap_label = QLabel("Colormap:")
-        cmap_layout.addWidget(cmap_label)
-
         self.cmap_combo = QComboBox()
-        self._reload_colormaps()
         self.cmap_combo.currentIndexChanged.connect(self._plot_selected)
-        cmap_layout.addWidget(self.cmap_combo)
 
         list_group = QGroupBox("Matrices")
         list_layout = QVBoxLayout(list_group)
@@ -744,56 +763,126 @@ class ConnectomeViewer(QMainWindow):
 
         group_style = (
             "QGroupBox {"
-            "font-weight: bold;"
-            "font-size: 14pt;"
-            "border: 3px solid #666666;"
-            "border-radius: 8px;"
-            "margin-top: 14px;"
-            "padding-top: 8px;"
+            "font-weight: 600;"
+            f"font-size: {'10pt' if compact_ui else '11pt'};"
+            "border: 1px solid #c9ced6;"
+            "border-radius: 6px;"
+            f"margin-top: {'8px' if compact_ui else '10px'};"
+            f"padding-top: {'4px' if compact_ui else '6px'};"
+            "background: #fcfcfc;"
             "}"
             "QGroupBox::title {"
             "subcontrol-origin: margin;"
-            "left: 12px;"
-            "padding: 0 6px;"
+            f"left: {'8px' if compact_ui else '10px'};"
+            "padding: 0 4px;"
             "}"
         )
-        for group in (list_group, selector_group, cmap_group, export_group, gradients_group, nbs_group):
+        for group in (list_group, selector_group, export_group, gradients_group, nbs_group):
             group.setStyleSheet(group_style)
 
         controls_layout.addWidget(list_group)
         controls_layout.addWidget(selector_group)
-        controls_layout.addWidget(cmap_group)
         controls_layout.addWidget(export_group)
 
         controls_layout.addStretch(1)
 
         center_panel = QWidget()
-        right_layout = QVBoxLayout(center_panel)
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setSpacing(6 if compact_ui else 8)
+
+        plot_toolbar = QHBoxLayout()
+        plot_toolbar.setSpacing(6 if compact_ui else 8)
+        self.left_sidebar_button = QPushButton("◀")
+        self.left_sidebar_button.setFixedWidth(30)
+        self.left_sidebar_button.clicked.connect(self._toggle_left_sidebar)
+        plot_toolbar.addWidget(self.left_sidebar_button)
+
+        self.plot_title_label = QLabel("")
+        title_font = self.plot_title_label.font()
+        if title_font.pointSize() > 0:
+            title_font.setPointSize(max(title_font.pointSize() - 1, 9))
+        self.plot_title_label.setFont(title_font)
+        self.plot_title_label.setStyleSheet("color: #2f3640;")
+        self.plot_title_label.setToolTip("")
+        plot_toolbar.addWidget(self.plot_title_label, 1)
+
+        plot_toolbar.addWidget(QLabel("Color map:"))
+        self.cmap_combo.setMinimumWidth(150 if compact_ui else 190)
+        plot_toolbar.addWidget(self.cmap_combo)
+
+        plot_toolbar.addWidget(QLabel("Display scaling:"))
+        self.display_auto_check = QCheckBox("Auto")
+        self.display_auto_check.setChecked(True)
+        self.display_auto_check.stateChanged.connect(self._on_display_scaling_changed)
+        plot_toolbar.addWidget(self.display_auto_check)
+
+        self.display_min_edit = QLineEdit("")
+        self.display_min_edit.setPlaceholderText("Min")
+        self.display_min_edit.setFixedWidth(78 if compact_ui else 90)
+        self.display_min_edit.setEnabled(False)
+        self.display_min_edit.editingFinished.connect(self._on_display_scaling_changed)
+        plot_toolbar.addWidget(self.display_min_edit)
+
+        self.display_max_edit = QLineEdit("")
+        self.display_max_edit.setPlaceholderText("Max")
+        self.display_max_edit.setFixedWidth(78 if compact_ui else 90)
+        self.display_max_edit.setEnabled(False)
+        self.display_max_edit.editingFinished.connect(self._on_display_scaling_changed)
+        plot_toolbar.addWidget(self.display_max_edit)
+
+        self.right_sidebar_button = QPushButton("▶")
+        self.right_sidebar_button.setFixedWidth(30)
+        self.right_sidebar_button.clicked.connect(self._toggle_right_sidebar)
+        plot_toolbar.addWidget(self.right_sidebar_button)
+        center_layout.addLayout(plot_toolbar)
+
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
         self.canvas.mpl_connect("motion_notify_event", self._on_hover)
-        right_layout.addWidget(self.canvas, 1)
+        center_layout.addWidget(self.canvas, 1)
 
         self.hover_label = QLabel("")
         self.hover_label.setWordWrap(True)
-        right_layout.addWidget(self.hover_label, 0)
+        center_layout.addWidget(self.hover_label, 0)
 
         right_panel = QWidget()
         right_panel_layout = QVBoxLayout(right_panel)
         right_panel_layout.addWidget(gradients_group)
         right_panel_layout.addWidget(nbs_group)
         right_panel_layout.addStretch(1)
+        left_panel.setMinimumWidth(0)
+        right_panel.setMinimumWidth(0)
 
         self.main_splitter.addWidget(left_panel)
         self.main_splitter.addWidget(center_panel)
         self.main_splitter.addWidget(right_panel)
+        self.main_splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.main_splitter.setCollapsible(0, True)
+        self.main_splitter.setCollapsible(1, False)
+        self.main_splitter.setCollapsible(2, True)
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
-        self.main_splitter.setSizes([420, 1000, 280])
+        if screen_geom is not None:
+            total_w = max(screen_geom.width(), 1000)
+            left_w = int(total_w * (0.31 if compact_ui else 0.26))
+            right_w = int(total_w * (0.15 if compact_ui else 0.18))
+            center_w = max(total_w - left_w - right_w, 480)
+            self.main_splitter.setSizes([left_w, center_w, right_w])
+        else:
+            self.main_splitter.setSizes([380, 900, 240])
+        current_sizes = self.main_splitter.sizes()
+        if len(current_sizes) == 3:
+            if current_sizes[0] > 0:
+                self._left_panel_saved_width = current_sizes[0]
+            if current_sizes[2] > 0:
+                self._right_panel_saved_width = current_sizes[2]
 
         self.setCentralWidget(central)
+        self._apply_button_icons(compact_ui=compact_ui)
         self._update_parcellation_label()
+        self._refresh_sidebar_toggle_buttons()
+        self._set_plot_title("")
         self._update_nbs_prepare_button()
         self.statusBar().showMessage("Ready.")
 
@@ -801,6 +890,39 @@ class ConnectomeViewer(QMainWindow):
         icon_path = Path(__file__).with_name("icons") / "conviewer.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+
+    def _svg_icon(self, filename: str) -> QIcon:
+        icon_path = Path(__file__).with_name("icons") / "svg" / filename
+        if icon_path.exists():
+            return QIcon(str(icon_path))
+        return QIcon()
+
+    def _apply_button_icons(self, compact_ui: bool = False) -> None:
+        icon_size = QSize(16, 16) if compact_ui else QSize(18, 18)
+        mapping = [
+            (getattr(self, "add_button", None), "folder_plus.svg"),
+            (getattr(self, "remove_button", None), "trash.svg"),
+            (getattr(self, "clear_button", None), "broom_clear.svg"),
+            (getattr(self, "hist_button", None), "histogram.svg"),
+            (getattr(self, "export_button", None), "export_grid.svg"),
+            (getattr(self, "move_up_button", None), "arrow_up.svg"),
+            (getattr(self, "move_down_button", None), "arrow_down.svg"),
+            (getattr(self, "gradients_compute_button", None), "play_circle_compute.svg"),
+            (getattr(self, "gradients_save_button", None), "save_disk.svg"),
+            (getattr(self, "gradients_render_button", None), "cube_3d.svg"),
+            (getattr(self, "nbs_prepare_button", None), "wrench_prepare.svg"),
+            (getattr(self, "select_parcellation_button", None), "settings_sliders.svg"),
+            (getattr(self, "average_button", None), "filter_threshold.svg"),
+            (getattr(self, "sample_add_button", None), "folder_plus.svg"),
+        ]
+        for button, icon_name in mapping:
+            if button is None:
+                continue
+            icon = self._svg_icon(icon_name)
+            if icon.isNull():
+                continue
+            button.setIcon(icon)
+            button.setIconSize(icon_size)
 
     def _file_entry_id(self, path: Path) -> str:
         return f"file::{path}"
@@ -1226,6 +1348,112 @@ class ConnectomeViewer(QMainWindow):
                 return name
         return name
 
+    def _set_plot_title(self, full_title: str, tooltip_text: str = "") -> None:
+        self._plot_title_full = str(full_title or "")
+        self._plot_title_tooltip = str(tooltip_text or full_title or "")
+        self._update_plot_title_label()
+
+    def _update_plot_title_label(self) -> None:
+        if not hasattr(self, "plot_title_label"):
+            return
+        full_title = self._plot_title_full
+        self.plot_title_label.setToolTip(self._plot_title_tooltip)
+        if not full_title:
+            self.plot_title_label.setText("")
+            return
+        metrics = QFontMetrics(self.plot_title_label.font())
+        avail = max(self.plot_title_label.width() - 4, 60)
+        elided = metrics.elidedText(full_title, Qt.ElideRight, avail)
+        self.plot_title_label.setText(elided)
+
+    def _current_display_limits(self):
+        if not hasattr(self, "display_auto_check") or self.display_auto_check.isChecked():
+            return None, None, None
+        vmin = None
+        vmax = None
+        min_text = self.display_min_edit.text().strip() if hasattr(self, "display_min_edit") else ""
+        max_text = self.display_max_edit.text().strip() if hasattr(self, "display_max_edit") else ""
+        if min_text:
+            try:
+                vmin = float(min_text)
+            except ValueError:
+                return None, None, "Display min must be numeric."
+        if max_text:
+            try:
+                vmax = float(max_text)
+            except ValueError:
+                return None, None, "Display max must be numeric."
+        if vmin is not None and vmax is not None and vmin >= vmax:
+            return None, None, "Display min must be smaller than max."
+        return vmin, vmax, None
+
+    def _on_display_scaling_changed(self, *_args) -> None:
+        auto_scale = self.display_auto_check.isChecked()
+        self.display_min_edit.setEnabled(not auto_scale)
+        self.display_max_edit.setEnabled(not auto_scale)
+        if self._current_entry_id() is not None:
+            self._plot_selected()
+
+    def _on_splitter_moved(self, *_args) -> None:
+        sizes = self.main_splitter.sizes()
+        if len(sizes) == 3:
+            if sizes[0] > 0:
+                self._left_panel_saved_width = sizes[0]
+            if sizes[2] > 0:
+                self._right_panel_saved_width = sizes[2]
+        self._refresh_sidebar_toggle_buttons()
+
+    def _refresh_sidebar_toggle_buttons(self) -> None:
+        if not hasattr(self, "left_sidebar_button") or not hasattr(self, "right_sidebar_button"):
+            return
+        sizes = self.main_splitter.sizes()
+        if len(sizes) != 3:
+            return
+        left_visible = sizes[0] > 0
+        right_visible = sizes[2] > 0
+        self.left_sidebar_button.setText("◀" if left_visible else "▶")
+        self.left_sidebar_button.setToolTip(
+            "Collapse data sidebar" if left_visible else "Expand data sidebar"
+        )
+        self.right_sidebar_button.setText("▶" if right_visible else "◀")
+        self.right_sidebar_button.setToolTip(
+            "Collapse analyses sidebar" if right_visible else "Expand analyses sidebar"
+        )
+
+    def _toggle_left_sidebar(self) -> None:
+        sizes = self.main_splitter.sizes()
+        if len(sizes) != 3:
+            return
+        left, center, right = sizes
+        total = max(left + center + right, 1)
+        if left > 0:
+            self._left_panel_saved_width = left
+            left = 0
+        else:
+            desired = max(self._left_panel_saved_width, 220)
+            max_left = max(total - right - 320, 120)
+            left = min(desired, max_left)
+        center = max(total - left - right, 260)
+        self.main_splitter.setSizes([left, center, right])
+        self._refresh_sidebar_toggle_buttons()
+
+    def _toggle_right_sidebar(self) -> None:
+        sizes = self.main_splitter.sizes()
+        if len(sizes) != 3:
+            return
+        left, center, right = sizes
+        total = max(left + center + right, 1)
+        if right > 0:
+            self._right_panel_saved_width = right
+            right = 0
+        else:
+            desired = max(self._right_panel_saved_width, 200)
+            max_right = max(total - left - 320, 120)
+            right = min(desired, max_right)
+        center = max(total - left - right, 260)
+        self.main_splitter.setSizes([left, center, right])
+        self._refresh_sidebar_toggle_buttons()
+
     def _selected_surface_colormap_name(self) -> str:
         if hasattr(self, "gradients_cmap_combo"):
             name = self.gradients_cmap_combo.currentText().strip()
@@ -1344,6 +1572,10 @@ class ConnectomeViewer(QMainWindow):
                 output_path = output_path.with_suffix(".png")
 
         colormap = self._selected_colormap()
+        vmin, vmax, scaling_error = self._current_display_limits()
+        if scaling_error:
+            self.statusBar().showMessage(scaling_error)
+            return
         matrices = []
         titles = []
         skipped = []
@@ -1376,7 +1608,14 @@ class ConnectomeViewer(QMainWindow):
         rotate = self.export_rotate_check.isChecked()
         for idx, (matrix, title) in enumerate(zip(matrices, titles)):
             ax = flat_axes[idx]
-            SimMatrixPlot.plot_simmatrix(matrix, ax=ax, titles=title, colormap=colormap)
+            SimMatrixPlot.plot_simmatrix(
+                matrix,
+                ax=ax,
+                titles=title,
+                colormap=colormap,
+                vmin=vmin,
+                vmax=vmax,
+            )
             _remove_axes_border(ax)
             if rotate:
                 _apply_rotation(ax, matrix, -45.0)
@@ -1488,12 +1727,26 @@ class ConnectomeViewer(QMainWindow):
         self._current_parcel_labels = labels_list
         self._current_parcel_names = names_list
 
+        vmin, vmax, scaling_error = self._current_display_limits()
+        if scaling_error:
+            self.statusBar().showMessage(scaling_error)
+            return
+
         colormap = self._selected_colormap()
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        SimMatrixPlot.plot_simmatrix(matrix, ax=ax, titles=current_title, colormap=colormap)
+        SimMatrixPlot.plot_simmatrix(
+            matrix,
+            ax=ax,
+            titles=None,
+            colormap=colormap,
+            vmin=vmin,
+            vmax=vmax,
+        )
         _remove_axes_border(ax)
         self._current_axes = ax
+        title_tooltip = str(source_path) if source_path is not None else current_title
+        self._set_plot_title(current_title, tooltip_text=title_tooltip)
         self._reset_gradients_output()
         self.canvas.draw_idle()
         self._update_nbs_prepare_button()
@@ -1874,7 +2127,15 @@ class ConnectomeViewer(QMainWindow):
                 cmap_name=cmap_name,
                 parent=self,
             )
-            self._surface_dialog.resize(1500, 300 + 300 * max(n_grad, 1))
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                geom = screen.availableGeometry()
+                width = max(int(geom.width() * 0.88), 900)
+                height = min(max(300 + 300 * max(n_grad, 1), 420), int(geom.height() * 0.9))
+            else:
+                width = 1500
+                height = 300 + 300 * max(n_grad, 1)
+            self._surface_dialog.resize(width, height)
             self._surface_dialog.show()
         except Exception as exc:
             self.statusBar().showMessage(f"Failed to render 3D surfaces: {exc}")
@@ -1887,6 +2148,7 @@ class ConnectomeViewer(QMainWindow):
         self._current_parcel_labels = None
         self._current_parcel_names = None
         self._current_axes = None
+        self._set_plot_title("")
         self._reset_gradients_output()
         self._update_nbs_prepare_button()
         self.hover_label.setText("")
@@ -1930,6 +2192,10 @@ class ConnectomeViewer(QMainWindow):
             parts.append(f"Names: {row_name} | {col_name}")
         self.hover_label.setText("  ".join(parts))
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_plot_title_label()
+
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
@@ -1952,9 +2218,47 @@ class ConnectomeViewer(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    splash_candidates = [
+        ROOTDIR / "assets" / "splash.png",
+        ROOTDIR / "icons" / "conviewer_2.png",
+        ROOTDIR / "icons" / "conviewer.png",
+    ]
+    splash_pix = QPixmap()
+    for candidate in splash_candidates:
+        if candidate.exists():
+            splash_pix = QPixmap(str(candidate))
+            if not splash_pix.isNull():
+                break
+
+    splash = None
+    if not splash_pix.isNull():
+        if hasattr(Qt, "WindowType"):
+            splash_hint = Qt.WindowType.WindowStaysOnTopHint
+        else:
+            splash_hint = Qt.WindowStaysOnTopHint
+        if hasattr(Qt, "AlignmentFlag"):
+            splash_align = Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter
+        else:
+            splash_align = Qt.AlignBottom | Qt.AlignHCenter
+        splash = QSplashScreen(splash_pix, splash_hint)
+        splash.show()
+        app.processEvents()
+        splash.showMessage("Loading resources...", splash_align, QColor("white"))
+        app.processEvents()
+        splash.showMessage("Building UI...", splash_align, QColor("white"))
+        app.processEvents()
+        splash_deadline = time.monotonic() + 3.0
+        while time.monotonic() < splash_deadline:
+            app.processEvents()
+            time.sleep(0.02)
+
     window = ConnectomeViewer()
-    window.resize(1200, 800)
-    window.show()
+    if splash is not None:
+        splash.showMessage("Starting Connectome Viewer...", splash_align, QColor("white"))
+        app.processEvents()
+    window.showMaximized()
+    if splash is not None:
+        splash.finish(window)
     return app.exec()
 
 

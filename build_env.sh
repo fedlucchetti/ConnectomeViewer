@@ -10,14 +10,31 @@ if ! command -v conda >/dev/null 2>&1; then
     exit 1
 fi
 
+if [[ ! -f "${SCRIPT_DIR}/${ENV_FILE}" ]]; then
+    echo "Missing ${ENV_FILE} in ${SCRIPT_DIR}."
+    exit 1
+fi
+
+run_conda_classic() {
+    CONDA_SOLVER=classic CONDA_CHANNEL_PRIORITY=strict conda "$@"
+}
+
 create_or_update_env() {
     cd "$SCRIPT_DIR"
-    if conda env list | grep -qE "^\s*${ENV_NAME}\s"; then
+    if run_conda_classic env list | grep -qE "^\s*${ENV_NAME}\s"; then
         echo "Updating '${ENV_NAME}' from ${ENV_FILE}..."
-        conda env update -n "${ENV_NAME}" -f "${ENV_FILE}" --prune
+        if ! run_conda_classic env update -n "${ENV_NAME}" -f "${ENV_FILE}" --prune --solver classic; then
+            echo "Conda update failed."
+            echo "If you still see libmamba errors, run: conda config --set solver classic"
+            exit 1
+        fi
     else
         echo "Creating '${ENV_NAME}' from ${ENV_FILE}..."
-        conda env create -n "${ENV_NAME}" -f "${ENV_FILE}"
+        if ! run_conda_classic env create -n "${ENV_NAME}" -f "${ENV_FILE}" --solver classic; then
+            echo "Conda create failed."
+            echo "If you still see libmamba errors, run: conda config --set solver classic"
+            exit 1
+        fi
     fi
     echo "Done. Use option 2 to activate."
 }
