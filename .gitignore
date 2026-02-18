@@ -4,3 +4,6 @@ build/
 mrsiviewer.egg-info/
 set_cupy_path.sh
 *__init__.py
+config/connectome_viewer.json
+results/
+data/
