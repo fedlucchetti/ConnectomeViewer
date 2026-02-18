@@ -207,6 +207,37 @@ run_conda_with_solver() {
   CONDA_CHANNEL_PRIORITY=strict conda "$@" --solver "${solver}"
 }
 
+probe_release_asset_for_tag() {
+  local tag="$1"
+  [[ -n "${tag}" ]] || return 1
+  local candidates=(
+    "donald_data_${tag}.tar.zst"
+    "connectome_viewer_data_${tag}.tar.zst"
+    "donald_data_${tag}.tar.gz"
+    "connectome_viewer_data_${tag}.tar.gz"
+    "donald_data_${tag}.zip"
+    "connectome_viewer_data_${tag}.zip"
+    "donald_data_${tag}.tar"
+    "connectome_viewer_data_${tag}.tar"
+  )
+
+  local asset_name asset_url
+  for asset_name in "${candidates[@]}"; do
+    asset_url="https://github.com/${DATA_RELEASE_REPO}/releases/download/${tag}/${asset_name}"
+    if curl -fsIL "${asset_url}" >/dev/null 2>&1; then
+      DATA_URL="${asset_url}"
+      RESOLVED_DATA_RELEASE_TAG="${tag}"
+      RESOLVED_DATA_ASSET_NAME="${asset_name}"
+      local sha_url="${asset_url}.sha256"
+      if curl -fsIL "${sha_url}" >/dev/null 2>&1; then
+        DATA_SHA256_URL="${sha_url}"
+      fi
+      return 0
+    fi
+  done
+  return 1
+}
+
 resolve_latest_data_release() {
   [[ -n "${DATA_URL}" ]] && return 0
 
@@ -219,6 +250,12 @@ resolve_latest_data_release() {
     DATA_RELEASE_REPO="fedlucchetti/ConnectomeViewer"
   fi
 
+  if [[ -n "${DATA_RELEASE_TAG}" ]]; then
+    if probe_release_asset_for_tag "${DATA_RELEASE_TAG}"; then
+      return 0
+    fi
+  fi
+
   local api_url
   if [[ -n "${DATA_RELEASE_TAG}" ]]; then
     api_url="https://api.github.com/repos/${DATA_RELEASE_REPO}/releases/tags/${DATA_RELEASE_TAG}"
@@ -228,6 +265,17 @@ resolve_latest_data_release() {
 
   local release_json
   if ! release_json="$(curl -fsSL -H "Accept: application/vnd.github+json" "${api_url}")"; then
+    if [[ -z "${DATA_RELEASE_TAG}" ]]; then
+      local latest_url latest_tag
+      latest_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${DATA_RELEASE_REPO}/releases/latest" || true)"
+      if [[ -n "${latest_url}" && "${latest_url}" == *"/releases/tag/"* ]]; then
+        latest_tag="${latest_url##*/}"
+        if probe_release_asset_for_tag "${latest_tag}"; then
+          return 0
+        fi
+      fi
+    fi
+    echo "Warning: could not query release metadata from ${api_url}" >&2
     return 1
   fi
 
@@ -286,6 +334,7 @@ if sha:
 PY
 )"; then
     rm -f "${json_file}"
+    echo "Warning: release metadata was fetched but no compatible data asset was detected." >&2
     return 1
   fi
   rm -f "${json_file}"
