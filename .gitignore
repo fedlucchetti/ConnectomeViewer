@@ -1,3 +1,4 @@
+.env
 __pycache__/
 bids_mrsi_viewer.py
 build/
