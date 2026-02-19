@@ -1,5 +1,7 @@
 # DONALD: Distributed Open-source Network AnaLysis Dashboard
 
+![Donald](icons/donald_title.png)
+
 Donald is a Qt GUI to load, inspect, aggregate, harmonize, and analyze connectome matrices stored in `.npz` files.
 
 ## Table of Contents
