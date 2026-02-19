@@ -22,13 +22,12 @@ fi
 
 DATA_URL="${DONALD_DATA_URL:-${CONNECTOME_VIEWER_DATA_URL:-}}"
 DATA_SHA256="${DONALD_DATA_SHA256:-${CONNECTOME_VIEWER_DATA_SHA256:-}}"
-DATA_RELEASE_REPO="${DONALD_DATA_REPO:-${CONNECTOME_VIEWER_DATA_REPO:-}}"
+DATA_RELEASE_REPO="${DONALD_DATA_REPO:-${CONNECTOME_VIEWER_DATA_REPO:-MRSI-Psychosis-UP/DONALD}}"
 DATA_RELEASE_TAG="${DONALD_DATA_TAG:-${CONNECTOME_VIEWER_DATA_TAG:-}}"
 DATA_SHA256_URL=""
 RESOLVED_DATA_RELEASE_TAG=""
 RESOLVED_DATA_ASSET_NAME=""
 DATA_RELEASE_MARKER="${DATA_DIR}/.donald_data_release_tag"
-BIDS_PATH=""
 
 SKIP_ENV=0
 SKIP_DATA=0
@@ -43,7 +42,7 @@ Usage: install_donald.sh [options]
 Integrated installer for Donald (Linux + macOS):
 1) Create/update conda environment
 2) Download/extract data release asset (optional)
-3) Configure .env (BIDSDATAPATH + DEVANALYSEPATH)
+3) Configure .env (DEVANALYSEPATH)
 4) Install launcher + desktop integration
 
 Options:
@@ -52,13 +51,11 @@ Options:
   --data-url URL        Public archive URL containing top-level data/ folder
   --data-sha256 HASH    Optional SHA256 checksum for data archive
   --data-repo OWNER/REPO  GitHub repo used for auto data release lookup
-                          (default: origin remote repo, fallback:
-                          fedlucchetti/ConnectomeViewer)
+                          (default: MRSI-Psychosis-UP/DONALD)
   --data-tag TAG        Use a specific data release tag (default: newest release
                         containing a matching data archive asset)
   --skip-data           Do not download/extract data archive
   --force-data          Re-download and overwrite existing data/ folder
-  --bids-path PATH      Set BIDSDATAPATH in .env (default: <repo>/data/BIDS)
   --skip-desktop        Skip desktop integration (Linux .desktop / macOS shortcut)
   --shell-rc FILE       Shell rc file to append PATH update (default auto:
                         ~/.bashrc on Linux, ~/.zshrc on macOS)
@@ -243,12 +240,6 @@ resolve_latest_data_release() {
 
   need_cmd curl
   need_cmd python3
-  if [[ -z "${DATA_RELEASE_REPO}" ]]; then
-    DATA_RELEASE_REPO="$(detect_repo_slug || true)"
-  fi
-  if [[ -z "${DATA_RELEASE_REPO}" ]]; then
-    DATA_RELEASE_REPO="fedlucchetti/ConnectomeViewer"
-  fi
 
   if [[ -n "${DATA_RELEASE_TAG}" ]]; then
     if probe_release_asset_for_tag "${DATA_RELEASE_TAG}"; then
@@ -417,6 +408,9 @@ download_data_if_needed() {
       return 0
     fi
   fi
+  if [[ -n "${DATA_URL}" && -z "${DATA_SHA256}" && -z "${DATA_SHA256_URL}" ]]; then
+    DATA_SHA256_URL="${DATA_URL}.sha256"
+  fi
 
   need_cmd curl
   need_cmd tar
@@ -427,7 +421,31 @@ download_data_if_needed() {
   archive_path="${tmp_dir}/${archive_name}"
 
   echo "Downloading data archive..."
-  curl -L --fail --retry 3 "${DATA_URL}" -o "${archive_path}"
+  if ! curl -L --fail --retry 3 "${DATA_URL}" -o "${archive_path}"; then
+    local alt_url=""
+    if [[ "${DATA_URL}" == *"connectome_viewer_data_"* ]]; then
+      alt_url="${DATA_URL/connectome_viewer_data_/donald_data_}"
+    elif [[ "${DATA_URL}" == *"donald_data_"* ]]; then
+      alt_url="${DATA_URL/donald_data_/connectome_viewer_data_}"
+    fi
+    if [[ -n "${alt_url}" && "${alt_url}" != "${DATA_URL}" ]]; then
+      echo "Primary data URL failed. Retrying with alternate asset prefix..."
+      echo "Retry URL: ${alt_url}"
+      if curl -L --fail --retry 3 "${alt_url}" -o "${archive_path}"; then
+        DATA_URL="${alt_url}"
+      else
+        echo "Failed to download data archive from both URLs." >&2
+        echo "Check your release tag and asset name on GitHub Releases." >&2
+        rm -rf "${tmp_dir}"
+        exit 1
+      fi
+    else
+      echo "Failed to download data archive from URL: ${DATA_URL}" >&2
+      echo "Check your release tag and asset name on GitHub Releases." >&2
+      rm -rf "${tmp_dir}"
+      exit 1
+    fi
+  fi
 
   if [[ -z "${DATA_SHA256}" && -n "${DATA_SHA256_URL}" ]]; then
     local sha_path parsed_sha
@@ -470,44 +488,11 @@ download_data_if_needed() {
   echo "Data installed at ${DATA_DIR}"
 }
 
-resolve_bids_path() {
-  if [[ -n "${BIDS_PATH}" ]]; then
-    expand_home_path "${BIDS_PATH}"
-    return
-  fi
-
-  local current
-  current="$(read_env_key "${ENV_DOTFILE}" "BIDSDATAPATH")"
-  local default_path
-  if [[ -n "${current}" ]]; then
-    default_path="${current}"
-  else
-    default_path="${BASE_DIR}/data/BIDS"
-  fi
-
-  if [[ "${NON_INTERACTIVE}" -eq 1 || ! -t 0 ]]; then
-    printf '%s' "${default_path}"
-    return
-  fi
-
-  read -rp "BIDSDATAPATH [${default_path}]: " input_path
-  if [[ -z "${input_path}" ]]; then
-    printf '%s' "${default_path}"
-  else
-    expand_home_path "${input_path}"
-  fi
-}
-
 configure_env_file() {
-  local bids_value
-  bids_value="$(resolve_bids_path)"
-
   upsert_env_key "${ENV_DOTFILE}" "DEVANALYSEPATH" "${BASE_DIR}"
-  upsert_env_key "${ENV_DOTFILE}" "BIDSDATAPATH" "${bids_value}"
 
   echo "Configured ${ENV_DOTFILE}:"
   echo "  DEVANALYSEPATH=${BASE_DIR}"
-  echo "  BIDSDATAPATH=${bids_value}"
 }
 
 install_launcher() {
@@ -611,11 +596,6 @@ while [[ $# -gt 0 ]]; do
     --force-data)
       FORCE_DATA=1
       shift
-      ;;
-    --bids-path)
-      [[ $# -ge 2 ]] || { echo "Missing value for --bids-path" >&2; exit 1; }
-      BIDS_PATH="$2"
-      shift 2
       ;;
     --skip-desktop)
       SKIP_DESKTOP=1

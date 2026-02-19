@@ -42,7 +42,6 @@ Common flags:
 - `--data-repo OWNER/REPO`
 - `--data-tag data-vYYYYMMDD`
 - `--data-url ... --data-sha256 ...` (manual override)
-- `--bids-path /path/to/BIDS`
 - `--skip-desktop`
 - `--non-interactive`
 - `--env-name donald`
@@ -64,7 +63,6 @@ donald
 ## Environment Configuration
 Installer writes `${REPO}/.env`:
 - `DEVANALYSEPATH=<repo root>`
-- `BIDSDATAPATH=<chosen path>` (default `${REPO}/data/BIDS`)
 
 ## Quick Usage
 1. Open Donald.
@@ -82,6 +80,7 @@ Code repo does not track heavy `data/` payloads.
 
 
 Installer auto-detects latest matching release asset (`donald_data_*` or legacy `connectome_viewer_data_*`).
+Default release repo: `MRSI-Psychosis-UP/DONALD`.
 
 ## Troubleshooting
 - NBS blocked: set MATLAB executable and NBS path in `Settings > Preferences`.
