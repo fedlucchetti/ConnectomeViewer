@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -212,6 +213,32 @@ def _user_role():
 USER_ROLE = _user_role()
 
 
+def _connectivity_file_metadata(path: Path) -> dict:
+    base_name = Path(path).name
+    results = {}
+    patterns = {
+        "atlas": r"atlas-([^_]+)",
+        "scale": r"scale(\d+)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, base_name)
+        results[key] = match.group(1) if match else None
+    if results["scale"] is not None:
+        results["scale"] = int(results["scale"])
+    return results
+
+
+def _connectivity_atlas_tag(path: Path) -> str:
+    meta = _connectivity_file_metadata(Path(path))
+    atlas = str(meta.get("atlas") or "").strip()
+    scale = meta.get("scale")
+    if atlas and scale is not None and f"scale{scale}" not in atlas:
+        return f"{atlas}_scale{scale}"
+    if atlas:
+        return atlas
+    return "unknown"
+
+
 def _dialog_accepted_code():
     accepted = getattr(QDialog, "Accepted", None)
     if accepted is not None:
@@ -220,6 +247,14 @@ def _dialog_accepted_code():
     if dialog_code is not None and hasattr(dialog_code, "Accepted"):
         return dialog_code.Accepted
     return 1
+
+
+def _is_enabled_flag():
+    return getattr(Qt, "ItemIsEnabled", getattr(Qt.ItemFlag, "ItemIsEnabled"))
+
+
+def _is_user_checkable_flag():
+    return getattr(Qt, "ItemIsUserCheckable", getattr(Qt.ItemFlag, "ItemIsUserCheckable"))
 
 
 def _load_app_icon() -> QIcon:
@@ -726,6 +761,229 @@ class PreferencesDialog(QDialog):
         }
 
 
+class BatchMatrixImportDialog(QDialog):
+    _MODALITY_OPTIONS = (
+        ("All", ""),
+        ("dwi", "connectivity_dwi"),
+        ("mrsi", "connectivity_mrsi"),
+        ("func", "connectivity_func"),
+    )
+
+    def __init__(self, folder_path: Path, candidate_paths, stack_callback=None, parent=None) -> None:
+        super().__init__(parent)
+        self._folder_path = Path(folder_path)
+        self._candidate_paths = [Path(path) for path in candidate_paths]
+        self._stack_callback = stack_callback
+        self._atlas_options = self._detected_atlas_options()
+        self._requested_action = "add"
+        self.setWindowTitle("Add Batch")
+        self.resize(860, 560)
+        self._build_ui()
+        self._populate_files()
+        self._apply_filters()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        self.folder_label = QLabel(f"Folder: {self._folder_path}")
+        self.folder_label.setWordWrap(True)
+        layout.addWidget(self.folder_label)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Filter"))
+        self.filter_value_edit = QLineEdit("")
+        self.filter_value_edit.setPlaceholderText("Substring match, e.g. scale3 or sub-001")
+        self.filter_value_edit.textChanged.connect(self._apply_filters)
+        self.filter_value_edit.returnPressed.connect(self._apply_filters)
+        filter_row.addWidget(self.filter_value_edit, 1)
+
+        filter_row.addWidget(QLabel("Modality"))
+        self.modality_combo = QComboBox()
+        for label, token in self._MODALITY_OPTIONS:
+            self.modality_combo.addItem(label, token)
+        self.modality_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.modality_combo)
+
+        filter_row.addWidget(QLabel("Atlas"))
+        self.atlas_combo = QComboBox()
+        self.atlas_combo.addItem("All", "")
+        for atlas in self._atlas_options:
+            self.atlas_combo.addItem(atlas, atlas)
+        self.atlas_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.atlas_combo)
+
+        self.filter_button = QPushButton("Filter")
+        self.filter_button.clicked.connect(self._apply_filters)
+        filter_row.addWidget(self.filter_button)
+
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.clicked.connect(self._reset_filters)
+        filter_row.addWidget(self.reset_button)
+        layout.addLayout(filter_row)
+
+        self.summary_label = QLabel("")
+        self.summary_label.setWordWrap(True)
+        layout.addWidget(self.summary_label)
+
+        self.file_list = QListWidget()
+        if QT_LIB == 6:
+            self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        else:
+            self.file_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.file_list.itemChanged.connect(self._on_item_changed)
+        layout.addWidget(self.file_list, 1)
+
+        select_row = QHBoxLayout()
+        self.select_visible_button = QPushButton("Select Visible")
+        self.select_visible_button.clicked.connect(lambda: self._set_visible_checked(True))
+        select_row.addWidget(self.select_visible_button)
+        self.clear_visible_button = QPushButton("Clear Visible")
+        self.clear_visible_button.clicked.connect(lambda: self._set_visible_checked(False))
+        select_row.addWidget(self.clear_visible_button)
+        select_row.addStretch(1)
+        layout.addLayout(select_row)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        actions.addWidget(self.cancel_button)
+        self.stack_button = QPushButton("Stack")
+        self.stack_button.clicked.connect(self._open_stack_prepare)
+        actions.addWidget(self.stack_button)
+        self.add_selected_button = QPushButton("Add Selected")
+        self.add_selected_button.clicked.connect(self._accept_if_selection)
+        actions.addWidget(self.add_selected_button)
+        layout.addLayout(actions)
+
+    def _populate_files(self) -> None:
+        self.file_list.blockSignals(True)
+        self.file_list.clear()
+        flags = _is_enabled_flag() | _is_user_checkable_flag()
+        for path in self._candidate_paths:
+            item = QListWidgetItem(self._relative_label(path))
+            item.setToolTip(str(path))
+            item.setData(USER_ROLE, str(path))
+            item.setFlags(item.flags() | flags)
+            item.setCheckState(Qt.Unchecked)
+            self.file_list.addItem(item)
+        self.file_list.blockSignals(False)
+
+    def _relative_label(self, path: Path) -> str:
+        try:
+            return path.relative_to(self._folder_path).as_posix()
+        except Exception:
+            return path.name
+
+    def _detected_atlas_options(self):
+        atlases = {_connectivity_atlas_tag(path) for path in self._candidate_paths}
+        return sorted(atlases, key=lambda value: (str(value).lower() == "unknown", str(value).lower()))
+
+    def _filter_tokens(self):
+        values = [token.strip().lower() for token in self.filter_value_edit.text().split(",")]
+        return [token for token in values if token]
+
+    def _matches_current_filters(self, path: Path) -> bool:
+        name = self._relative_label(path).lower()
+        modality_token = str(self.modality_combo.currentData() or "").strip().lower()
+        if modality_token and modality_token not in name:
+            return False
+        atlas_token = str(self.atlas_combo.currentData() or "").strip()
+        if atlas_token and _connectivity_atlas_tag(path) != atlas_token:
+            return False
+        for token in self._filter_tokens():
+            if token not in name:
+                return False
+        return True
+
+    def _checked_count(self) -> int:
+        total = 0
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is not None and item.checkState() == Qt.Checked:
+                total += 1
+        return total
+
+    def _on_item_changed(self, _item) -> None:
+        self._apply_filters()
+
+    def _apply_filters(self) -> None:
+        visible_count = 0
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is None:
+                continue
+            raw_path = item.data(USER_ROLE)
+            path = Path(str(raw_path))
+            is_visible = self._matches_current_filters(path)
+            item.setHidden(not is_visible)
+            if is_visible:
+                visible_count += 1
+        total = self.file_list.count()
+        selected = self._checked_count()
+        self.summary_label.setText(
+            f"Showing {visible_count} of {total} connectivity matrices. Selected: {selected}."
+        )
+
+    def _reset_filters(self) -> None:
+        self.filter_value_edit.clear()
+        self.modality_combo.setCurrentIndex(0)
+        self.atlas_combo.setCurrentIndex(0)
+        self._apply_filters()
+
+    def _set_visible_checked(self, checked: bool) -> None:
+        target_state = Qt.Checked if checked else Qt.Unchecked
+        self.file_list.blockSignals(True)
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is None or item.isHidden():
+                continue
+            item.setCheckState(target_state)
+        self.file_list.blockSignals(False)
+        self._apply_filters()
+
+    def selected_paths(self):
+        paths = []
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is None or item.checkState() != Qt.Checked:
+                continue
+            raw_path = item.data(USER_ROLE)
+            if raw_path:
+                paths.append(str(raw_path))
+        return paths
+
+    def requested_action(self) -> str:
+        return str(self._requested_action or "add")
+
+    def _accept_if_selection(self) -> None:
+        if not self.selected_paths():
+            QMessageBox.information(self, "No Files Selected", "Select at least one matrix to add.")
+            return
+        self._requested_action = "add"
+        self.accept()
+
+    def _open_stack_prepare(self) -> None:
+        selected = self.selected_paths()
+        if not selected:
+            QMessageBox.information(self, "No Files Selected", "Select at least one matrix to stack.")
+            return
+        selected_atlases = sorted({_connectivity_atlas_tag(Path(path)) for path in selected})
+        if len(selected_atlases) > 1:
+            QMessageBox.warning(
+                self,
+                "Mixed Atlases",
+                "Stack requires a single atlas selection.\n\n"
+                f"Detected atlases: {', '.join(selected_atlases)}\n\n"
+                "Use the Atlas filter to select one atlas before stacking.",
+            )
+            return
+        if self._stack_callback is None:
+            QMessageBox.warning(self, "Stack Unavailable", "No stack callback is configured.")
+            return
+        self._requested_action = "stack"
+        self.accept()
+
 class ConnectomeViewer(QMainWindow):
     _global_font_adjusted = False
 
@@ -754,6 +1012,8 @@ class ConnectomeViewer(QMainWindow):
         self._nbs_dialog = None
         self._selector_dialog = None
         self._harmonize_dialog = None
+        self._batch_import_dialog = None
+        self._stack_prepare_dialog = None
         self._left_panel_saved_width = 320
         self._right_panel_saved_width = 240
         self._plot_title_full = ""
@@ -1182,6 +1442,10 @@ class ConnectomeViewer(QMainWindow):
         self.add_button.clicked.connect(self._open_files)
         list_layout.addWidget(self.add_button)
 
+        self.add_batch_button = QPushButton("Add Batch")
+        self.add_batch_button.clicked.connect(self._open_batch_folder)
+        list_layout.addWidget(self.add_batch_button)
+
         self.remove_button = QPushButton("Remove Selected")
         self.remove_button.clicked.connect(self._remove_selected)
         list_layout.addWidget(self.remove_button)
@@ -1608,6 +1872,18 @@ class ConnectomeViewer(QMainWindow):
                 self._harmonize_dialog.set_theme(theme)
             except Exception:
                 pass
+        if getattr(self, "_stack_prepare_dialog", None) is not None and hasattr(
+            self._stack_prepare_dialog, "set_theme"
+        ):
+            try:
+                self._stack_prepare_dialog.set_theme(theme)
+            except Exception:
+                pass
+        if getattr(self, "_batch_import_dialog", None) is not None:
+            try:
+                self._batch_import_dialog.setStyleSheet(self.styleSheet())
+            except Exception:
+                pass
         if getattr(self, "_surface_dialog", None) is not None and hasattr(
             self._surface_dialog, "set_theme"
         ):
@@ -1679,6 +1955,7 @@ class ConnectomeViewer(QMainWindow):
         icon_size = QSize(16, 16) if compact_ui else QSize(18, 18)
         mapping = [
             (getattr(self, "add_button", None), "folder_plus.svg"),
+            (getattr(self, "add_batch_button", None), "folder_plus.svg"),
             (getattr(self, "remove_button", None), "trash.svg"),
             (getattr(self, "clear_button", None), "broom_clear.svg"),
             (getattr(self, "hist_button", None), "histogram.svg"),
@@ -2076,6 +2353,53 @@ class ConnectomeViewer(QMainWindow):
             )
         return True
 
+    def _import_stacked_result(self, payload) -> bool:
+        output_raw = str(payload.get("output_path") or "").strip()
+        if not output_raw:
+            self.statusBar().showMessage("Stack export payload missing output path.")
+            return False
+        output_path = Path(output_raw)
+        if not output_path.is_file():
+            self.statusBar().showMessage(f"Stacked file not found: {output_path}")
+            return False
+
+        self._add_files([str(output_path)])
+        target_id = self._file_entry_id(output_path)
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is None:
+                continue
+            if item.data(USER_ROLE) == target_id:
+                self.file_list.setCurrentItem(item)
+                self.statusBar().showMessage(f"Imported stacked matrix file: {output_path.name}.")
+                return True
+        self.statusBar().showMessage(f"Stacked matrix saved to {output_path.name}.")
+        return True
+
+    def _open_stack_prepare_dialog(self, selected_paths) -> None:
+        paths = [str(path) for path in (selected_paths or []) if str(path).strip()]
+        if not paths:
+            self.statusBar().showMessage("Stack requires at least one selected matrix file.")
+            return
+
+        try:
+            from window.stack_prepare import StackPrepareDialog
+        except Exception:
+            try:
+                from mrsi_viewer.window.stack_prepare import StackPrepareDialog
+            except Exception as exc:
+                self.statusBar().showMessage(f"Failed to open Stack window: {exc}")
+                return
+
+        self._stack_prepare_dialog = StackPrepareDialog(
+            selected_paths=paths,
+            theme_name=self._theme_name,
+            export_callback=self._import_stacked_result,
+            parent=self,
+        )
+        self._stack_prepare_dialog.show()
+        self.statusBar().showMessage(f"Opened Stack Prepare ({len(paths)} selected files).")
+
     def _import_selector_aggregate(self, payload) -> bool:
         try:
             matrix = np.asarray(payload.get("matrix"), dtype=float)
@@ -2136,7 +2460,81 @@ class ConnectomeViewer(QMainWindow):
         )
         self._add_files(paths)
 
-    def _add_files(self, paths) -> None:
+    def _batch_connectivity_paths(self, folder_path: Path):
+        folder_path = Path(folder_path)
+        candidates = []
+        try:
+            for root, dirs, files in os.walk(folder_path, followlinks=False):
+                dirs.sort(key=str.lower)
+                files.sort(key=str.lower)
+                root_path = Path(root)
+                for filename in files:
+                    name = filename.lower()
+                    if not name.endswith(".npz"):
+                        continue
+                    if "connectivity" not in name:
+                        continue
+                    candidates.append(root_path / filename)
+        except Exception:
+            return candidates
+        return sorted(candidates, key=lambda path: str(path.relative_to(folder_path)).lower())
+
+    def _open_batch_import_dialog(self, folder_path: Path):
+        folder_path = Path(folder_path)
+        candidate_paths = self._batch_connectivity_paths(folder_path)
+        if not candidate_paths:
+            self.statusBar().showMessage(
+                f"No .npz files containing 'connectivity' found in {folder_path.name} or its subfolders."
+            )
+            QMessageBox.information(
+                self,
+                "No Connectivity Matrices",
+                (
+                    f"No files ending in .npz and containing 'connectivity' were found in:\n"
+                    f"{folder_path}\n\n"
+                    f"Subfolders were scanned recursively."
+                ),
+            )
+            return []
+
+        dialog = BatchMatrixImportDialog(
+            folder_path,
+            candidate_paths,
+            stack_callback=self._open_stack_prepare_dialog,
+            parent=self,
+        )
+        self._batch_import_dialog = dialog
+        if self.styleSheet():
+            dialog.setStyleSheet(self.styleSheet())
+        if dialog.exec() != _dialog_accepted_code():
+            return []
+
+        selected_paths = dialog.selected_paths()
+        if dialog.requested_action() == "stack":
+            self._open_stack_prepare_dialog(selected_paths)
+            return []
+        added_paths = self._add_files(selected_paths)
+        if not added_paths:
+            self.statusBar().showMessage("No new batch files were added.")
+            return []
+        self.statusBar().showMessage(
+            f"Added {len(added_paths)} matrix files from {folder_path.name}."
+        )
+        return added_paths
+
+    def _open_batch_folder(self) -> None:
+        selected_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select folder with connectivity matrices",
+            str(self._default_dialog_dir()),
+        )
+        if not selected_dir:
+            return
+
+        self._open_batch_import_dialog(Path(selected_dir))
+
+    def _add_files(self, paths):
+        added_paths = []
         added_any = False
         for raw_path in paths:
             if not raw_path:
@@ -2161,6 +2559,7 @@ class ConnectomeViewer(QMainWindow):
             item.setToolTip(str(path))
             item.setData(USER_ROLE, entry_id)
             self.file_list.addItem(item)
+            added_paths.append(path)
             added_any = True
 
         if added_any and self.file_list.currentItem() is None:
@@ -2168,6 +2567,7 @@ class ConnectomeViewer(QMainWindow):
 
         if not added_any:
             self.statusBar().showMessage("No valid .npz files added.")
+        return added_paths
 
     def _remove_selected(self) -> None:
         item = self.file_list.currentItem()
@@ -3491,7 +3891,10 @@ class ConnectomeViewer(QMainWindow):
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.isLocalFile() and url.toLocalFile().lower().endswith(".npz"):
+                if not url.isLocalFile():
+                    continue
+                local_path = Path(url.toLocalFile())
+                if local_path.is_dir() or local_path.suffix.lower() == ".npz":
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -3500,11 +3903,24 @@ class ConnectomeViewer(QMainWindow):
         if not event.mimeData().hasUrls():
             event.ignore()
             return
-        paths = []
+        file_paths = []
+        folder_paths = []
         for url in event.mimeData().urls():
-            if url.isLocalFile():
-                paths.append(url.toLocalFile())
-        self._add_files(paths)
+            if not url.isLocalFile():
+                continue
+            local_path = Path(url.toLocalFile())
+            if local_path.is_dir():
+                folder_paths.append(local_path)
+            else:
+                file_paths.append(str(local_path))
+
+        if file_paths:
+            self._add_files(file_paths)
+        for folder_path in folder_paths:
+            self._open_batch_import_dialog(folder_path)
+        if not file_paths and not folder_paths:
+            event.ignore()
+            return
         event.acceptProposedAction()
 
 
