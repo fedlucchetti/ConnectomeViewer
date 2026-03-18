@@ -1,0 +1,30 @@
+Covariate diagnostics summary
+Input file: /media/flucchetti/NVME_BIDS_1/LPN-BioPsych-Project/derivatives/covars.tsv
+Output directory: /home/flucchetti/Connectome/Dev/mrsi_viewer/scripts/covariate_diagnostics_covars_20260310
+Regressor: Diag (analysis restricted to groups (0, 1, 2))
+Covariates: Sex, Age
+Rows loaded: 75
+Rows removed for missing/non-integer regressor: 0
+Rows removed because regressor was outside 0/1/2: 0
+Rows used in diagnostics: 75
+Sex coding: values mapped to 1 include 1/m/male/yes/true; values mapped to 0 include 0/f/female/no/false.
+Pairwise differences are reported as diag_b minus diag_a. For example, 0_vs_1 means Diag 1 minus Diag 0.
+
+Group summaries:
+Diag 0: n_total=26, Age n=26 mean=26.240 sd=7.537 range=[19.000, 57.788], Sex n=26 prop(Sex=1)=0.500 (13/26).
+Diag 1: n_total=24, Age n=24 mean=22.341 sd=4.127 range=[15.400, 34.700], Sex n=24 prop(Sex=1)=0.792 (19/24).
+Diag 2: n_total=25, Age n=25 mean=29.651 sd=6.693 range=[19.704, 44.630], Sex n=25 prop(Sex=1)=0.800 (20/25).
+
+Pairwise balance diagnostics:
+0_vs_1 Age: mean diff=-3.899, SMD=-0.635 (large), Welch p=0.027, 95% CrI=[-7.346, -0.440], P(diff>0)=0.015.
+0_vs_1 Sex: proportion diff=0.292, SMD=0.640 (large), Fisher p=0.042, 95% CrI=[0.021, 0.501], P(diff>0)=0.983.
+0_vs_1 observed Age overlap: status=overlap, overlap width=15.700, fraction of shorter span=0.813.
+0_vs_2 Age: mean diff=3.411, SMD=0.478 (moderate), Welch p=0.094, 95% CrI=[-0.655, 7.480], P(diff>0)=0.951.
+0_vs_2 Sex: proportion diff=0.300, SMD=0.663 (large), Fisher p=0.040, 95% CrI=[0.033, 0.506], P(diff>0)=0.987.
+0_vs_2 observed Age overlap: status=overlap, overlap width=24.925, fraction of shorter span=1.000.
+1_vs_2 Age: mean diff=7.310, SMD=1.309 (large), Welch p=0.000, 95% CrI=[4.076, 10.549], P(diff>0)=1.000.
+1_vs_2 Sex: proportion diff=0.008, SMD=0.021 (negligible), Fisher p=1.000, 95% CrI=[-0.212, 0.231], P(diff>0)=0.532.
+1_vs_2 observed Age overlap: status=overlap, overlap width=14.996, fraction of shorter span=0.777.
+
+Heuristic SMD interpretation:
+abs(SMD) < 0.1 negligible, 0.1-0.2 small, 0.2-0.5 moderate, >= 0.5 large.

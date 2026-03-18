@@ -76,6 +76,30 @@ def _slugify(value: Any) -> str:
     return text or "na"
 
 
+def _infer_modality_from_source(source_path: Path | str) -> str:
+    src = Path(source_path).expanduser()
+    if src.is_file() and src.suffix.lower() == ".npz":
+        try:
+            with np.load(src, allow_pickle=True) as npz:
+                modality = _npz_scalar_text(npz, "modality").strip().lower()
+                if modality:
+                    return modality
+        except Exception:
+            pass
+    match = re.search(r"connectivity[_-]([A-Za-z0-9]+)", src.stem, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip().lower()
+    return ""
+
+
+def _default_output_stem(source_path: Path | str) -> str:
+    stem = Path(source_path).stem
+    match = re.search(r"^(.*?)(?:[_-]desc)?[_-]connectivity[_-][A-Za-z0-9]+(?:[_-].*)?$", stem, flags=re.IGNORECASE)
+    if match and match.group(1).strip():
+        return match.group(1).strip("_-")
+    return stem
+
+
 def _npz_scalar_text(npz, key: str) -> str:
     if key not in npz:
         return ""
@@ -446,13 +470,11 @@ def build_default_output_path(
     src = Path(source_path)
     out_dir = Path(output_dir) if output_dir else src.parent
     out_dir = out_dir.expanduser()
-    nuisances = list(categorical_cols or []) + list(continuous_cols or [])
-    nuisance_tag = "none" if not nuisances else "-".join(_slugify(col) for col in nuisances)
-    fisher_tag = "fisher" if apply_fisher else "nofisher"
-    name = (
-        f"{_slugify(src.stem)}_{_slugify(matrix_key)}_batch-{_slugify(batch_col)}"
-        f"_cov-{nuisance_tag}_{fisher_tag}_harmonized_connmat.npz"
-    )
+    modality = _infer_modality_from_source(src)
+    if not modality:
+        modality = "unknown"
+    prefix = _slugify(_default_output_stem(src))
+    name = f"{prefix}_harmonized_connectivity_{_slugify(modality)}.npz"
     return out_dir / name
 
 

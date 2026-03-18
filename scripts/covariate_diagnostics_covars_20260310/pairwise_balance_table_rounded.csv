@@ -1,0 +1,7 @@
+comparison,covariate,diag_a,diag_b,difference_direction,n_a,n_b,estimate_a,estimate_b,diff_b_minus_a,sd_a,sd_b,smd,test_name,test_statistic,p_value,sex_1_count_a,sex_0_count_a,sex_1_count_b,sex_0_count_b,posterior_ci_low,posterior_ci_high,posterior_prob_diff_gt_0,posterior_difference_file
+0_vs_1,Age,0,1,diag_b_minus_diag_a,26,24,26.2402,22.3411,-3.8991,7.5375,4.1268,-0.6346,welch_t_test,2.2917,0.0274,,,,,-7.3457,-0.4402,0.0147,posterior_age_diff_0_vs_1.png
+0_vs_1,Sex,0,1,diag_b_minus_diag_a,26,24,0.5,0.7917,0.2917,,,0.6403,fisher_exact,0.2632,0.042,13.0,13.0,19.0,5.0,0.0208,0.5011,0.9826,posterior_sex_diff_0_vs_1.png
+0_vs_2,Age,0,2,diag_b_minus_diag_a,26,25,26.2402,29.6508,3.4106,7.5375,6.6927,0.4779,welch_t_test,-1.7102,0.0936,,,,,-0.6549,7.4796,0.9515,posterior_age_diff_0_vs_2.png
+0_vs_2,Sex,0,2,diag_b_minus_diag_a,26,25,0.5,0.8,0.3,,,0.6626,fisher_exact,0.25,0.0399,13.0,13.0,20.0,5.0,0.0329,0.5057,0.987,posterior_sex_diff_0_vs_2.png
+1_vs_2,Age,1,2,diag_b_minus_diag_a,24,25,22.3411,29.6508,7.3097,4.1268,6.6927,1.3085,welch_t_test,-4.6219,0.0,,,,,4.076,10.5494,1.0,posterior_age_diff_1_vs_2.png
+1_vs_2,Sex,1,2,diag_b_minus_diag_a,24,25,0.7917,0.8,0.0083,,,0.0207,fisher_exact,0.95,1.0,19.0,5.0,20.0,5.0,-0.2117,0.2311,0.5319,posterior_sex_diff_1_vs_2.png

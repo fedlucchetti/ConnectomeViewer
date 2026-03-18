@@ -37,6 +37,8 @@ def filter_sparse_matrices(matrix_list,sigma=1):
     n_zeros_arr = np.array(n_zeros_arr)
     debug.info("0 nodal strength count",n_zeros_arr.mean(),"+-",n_zeros_arr.std())
 
+    if n_zeros_arr.mean()<0.001:
+        return matrix_list, [], []
     include_indices = list()
     exclude_indices = list()
     matrix_list_refined = list()
@@ -191,14 +193,54 @@ def _coerce_parcel_labels(parcel_labels, fallback_size=0):
     return arr.reshape(-1)
 
 
+def _coerce_label_list(labels):
+    if labels is None:
+        return []
+    if isinstance(labels, np.ndarray):
+        return labels.reshape(-1).tolist()
+    if isinstance(labels, (list, tuple, set)):
+        return list(labels)
+    return [labels]
+
+
+def _labels_between_bounds(parcel_labels, start_label, end_label=None, prefix="template"):
+    labels_arr = _coerce_parcel_labels(parcel_labels, fallback_size=0)
+    if labels_arr.size == 0:
+        raise ValueError(f"{prefix} has no parcel labels to define a template range.")
+    start_key = _parcel_label_key(start_label)
+    end_value = start_label if end_label is None else end_label
+    end_key = _parcel_label_key(end_value)
+    label_keys = [_parcel_label_key(label) for label in labels_arr]
+
+    start_matches = [idx for idx, key in enumerate(label_keys) if key == start_key]
+    end_matches = [idx for idx, key in enumerate(label_keys) if key == end_key]
+    if not start_matches:
+        raise ValueError(f"{prefix} start parcel label {start_label!r} was not found.")
+    if not end_matches:
+        raise ValueError(f"{prefix} end parcel label {end_value!r} was not found.")
+    if len(start_matches) > 1:
+        raise ValueError(f"{prefix} start parcel label {start_label!r} is not unique.")
+    if len(end_matches) > 1:
+        raise ValueError(f"{prefix} end parcel label {end_value!r} is not unique.")
+
+    start_idx = start_matches[0]
+    end_idx = end_matches[0]
+    if start_idx > end_idx:
+        raise ValueError(
+            f"{prefix} invalid parcel range: start label {start_label!r} appears after end label {end_value!r}."
+        )
+    keep_idx = np.arange(start_idx, end_idx + 1, dtype=int)
+    return labels_arr[keep_idx]
+
+
 def _retain_parcel_labels(matrix, profile, parcel_labels, parcel_names, retain_labels, prefix):
     matrix = np.asarray(matrix)
     labels_arr = _coerce_parcel_labels(parcel_labels, fallback_size=matrix.shape[0] if matrix.ndim >= 1 else 0)
-    if not retain_labels:
+    retain_list = _coerce_label_list(retain_labels)
+    if len(retain_list) == 0:
         return matrix, profile, labels_arr, _coerce_parcel_names(parcel_names, len(labels_arr))
 
     names_arr = _coerce_parcel_names(parcel_names, len(labels_arr))
-    retain_list = list(retain_labels)
     retain_keys = [_parcel_label_key(label) for label in retain_list]
     label_to_index = {}
     label_to_name = {}
@@ -264,6 +306,230 @@ def _retain_parcel_labels(matrix, profile, parcel_labels, parcel_names, retain_l
     return matrix_out, profile_out, np.asarray(retain_list), retained_names
 
 
+def _compact_matrix_to_parcel_labels(matrix, profile, parcel_labels, parcel_names, prefix):
+    matrix_arr = np.asarray(matrix)
+    labels_arr = _coerce_parcel_labels(parcel_labels, fallback_size=matrix_arr.shape[0] if matrix_arr.ndim >= 1 else 0)
+    names_arr = _coerce_parcel_names(parcel_names, len(labels_arr))
+
+    if matrix_arr.ndim < 2:
+        return matrix_arr, profile, labels_arr, names_arr
+    if matrix_arr.shape[0] == len(labels_arr) and matrix_arr.shape[1] == len(labels_arr):
+        return matrix_arr, profile, labels_arr, names_arr
+    if matrix_arr.shape[0] != matrix_arr.shape[1]:
+        raise ValueError(f"{prefix} matrix is not square: shape {matrix_arr.shape}")
+    if len(labels_arr) == 0:
+        raise ValueError(f"{prefix} has no parcel labels to align with matrix shape {matrix_arr.shape}.")
+
+    label_keys = [_parcel_label_key(label) for label in labels_arr]
+    if not all(isinstance(key, (int, np.integer)) for key in label_keys):
+        raise ValueError(
+            f"{prefix} cannot compact matrix shape {matrix_arr.shape} because parcel labels are not integer-coded."
+        )
+
+    label_ids = np.asarray(label_keys, dtype=int)
+    if len(np.unique(label_ids)) != len(label_ids):
+        raise ValueError(f"{prefix} cannot compact matrix because parcel labels are not unique.")
+
+    dense_size = int(matrix_arr.shape[0])
+    indices_one_based = label_ids - 1
+    indices_zero_based = label_ids
+    valid_one_based = (indices_one_based >= 0) & (indices_one_based < dense_size)
+    valid_zero_based = (indices_zero_based >= 0) & (indices_zero_based < dense_size)
+
+    count_one_based = int(np.sum(valid_one_based))
+    count_zero_based = int(np.sum(valid_zero_based))
+    prefer_one_based = bool(np.min(label_ids) >= 1)
+    if count_one_based > count_zero_based or (count_one_based == count_zero_based and prefer_one_based):
+        dense_indices = indices_one_based
+        valid_mask = valid_one_based
+    else:
+        dense_indices = indices_zero_based
+        valid_mask = valid_zero_based
+    mapped_count = int(np.sum(valid_mask))
+    if mapped_count <= 0:
+        raise ValueError(
+            f"{prefix} cannot map {len(label_ids)} parcel labels onto matrix shape {matrix_arr.shape}."
+        )
+
+    retained_size = len(label_ids)
+    matrix_out = np.zeros((retained_size, retained_size), dtype=matrix_arr.dtype)
+    if mapped_count < retained_size:
+        debug.warning(
+            f"{prefix} mapped {mapped_count}/{retained_size} labels onto dense matrix shape {matrix_arr.shape}; "
+            "missing labels were zero-filled."
+        )
+    ref_indices = np.where(valid_mask)[0].astype(int)
+    src_dense_indices = np.asarray(dense_indices[valid_mask], dtype=int)
+    matrix_out[np.ix_(ref_indices, ref_indices)] = matrix_arr[np.ix_(src_dense_indices, src_dense_indices)]
+
+    profile_out = profile
+    if profile is not None:
+        profile_arr = np.asarray(profile)
+        if profile_arr.ndim >= 1:
+            if profile_arr.shape[0] == matrix_arr.shape[0]:
+                profile_out = np.zeros((retained_size,) + tuple(profile_arr.shape[1:]), dtype=profile_arr.dtype)
+                profile_out[ref_indices, ...] = profile_arr[src_dense_indices, ...]
+            elif profile_arr.ndim >= 2 and profile_arr.shape[1] == matrix_arr.shape[0]:
+                profile_out = np.zeros(
+                    (profile_arr.shape[0], retained_size) + tuple(profile_arr.shape[2:]),
+                    dtype=profile_arr.dtype,
+                )
+                profile_out[:, ref_indices, ...] = profile_arr[:, src_dense_indices, ...]
+            elif profile_arr.ndim >= 3 and profile_arr.shape[2] == matrix_arr.shape[0]:
+                profile_out = np.zeros(
+                    tuple(profile_arr.shape[:2]) + (retained_size,) + tuple(profile_arr.shape[3:]),
+                    dtype=profile_arr.dtype,
+                )
+                profile_out[:, :, ref_indices, ...] = profile_arr[:, :, src_dense_indices, ...]
+            elif profile_arr.shape[0] == len(labels_arr):
+                profile_out = profile_arr
+            else:
+                debug.warning(
+                    f"{prefix} could not compact profile with shape {profile_arr.shape}; "
+                    "parcel axis did not match either the dense matrix or the compact label vector."
+                )
+                profile_out = profile_arr
+
+    debug.info(
+        f"{prefix} compacted matrix from dense label-id space {matrix_arr.shape} to compact parcel space {matrix_out.shape}."
+    )
+    return matrix_out, profile_out, labels_arr, names_arr
+
+
+def _crop_parcel_label_space(
+    matrix,
+    profile,
+    parcel_labels,
+    parcel_names,
+    include_parcels,
+    include_parcels_start,
+    include_parcels_end,
+    prefix,
+):
+    matrix_arr = np.asarray(matrix)
+    labels_arr = _coerce_parcel_labels(parcel_labels, fallback_size=matrix_arr.shape[0] if matrix_arr.ndim >= 1 else 0)
+    names_arr = _coerce_parcel_names(parcel_names, len(labels_arr))
+    if not include_parcels:
+        return matrix_arr, profile, labels_arr, names_arr
+
+    if matrix_arr.ndim < 2 or matrix_arr.shape[0] != len(labels_arr) or matrix_arr.shape[1] != len(labels_arr):
+        raise ValueError(
+            f"{prefix} cannot crop parcel labels because matrix shape {matrix_arr.shape} "
+            f"does not match {len(labels_arr)} labels."
+        )
+
+    start_key = _parcel_label_key(include_parcels_start)
+    end_value = include_parcels_start if include_parcels_end is None else include_parcels_end
+    end_key = _parcel_label_key(end_value)
+
+    label_keys = [_parcel_label_key(label) for label in labels_arr]
+    start_matches = [idx for idx, key in enumerate(label_keys) if key == start_key]
+    end_matches = [idx for idx, key in enumerate(label_keys) if key == end_key]
+    if not start_matches:
+        raise ValueError(f"{prefix} start parcel label {include_parcels_start!r} was not found.")
+    if not end_matches:
+        raise ValueError(f"{prefix} end parcel label {end_value!r} was not found.")
+    if len(start_matches) > 1:
+        raise ValueError(f"{prefix} start parcel label {include_parcels_start!r} is not unique.")
+    if len(end_matches) > 1:
+        raise ValueError(f"{prefix} end parcel label {end_value!r} is not unique.")
+
+    start_idx = start_matches[0]
+    end_idx = end_matches[0]
+    if start_idx > end_idx:
+        raise ValueError(
+            f"{prefix} invalid parcel range: start label {include_parcels_start!r} "
+            f"appears after end label {end_value!r}."
+        )
+
+    keep_idx = np.arange(start_idx, end_idx + 1, dtype=int)
+    matrix_out = matrix_arr[np.ix_(keep_idx, keep_idx)]
+
+    profile_out = profile
+    if profile is not None:
+        profile_arr = np.asarray(profile)
+        if profile_arr.ndim >= 1:
+            if profile_arr.shape[0] == len(labels_arr):
+                profile_out = profile_arr[keep_idx, ...]
+            elif profile_arr.ndim >= 2 and profile_arr.shape[1] == len(labels_arr):
+                profile_out = profile_arr[:, keep_idx, ...]
+            elif profile_arr.ndim >= 3 and profile_arr.shape[2] == len(labels_arr):
+                profile_out = profile_arr[:, :, keep_idx, ...]
+            else:
+                debug.warning(
+                    f"{prefix} could not crop profile with shape {profile_arr.shape}; "
+                    "parcel axis did not match the label vector."
+                )
+                profile_out = profile_arr
+
+    return matrix_out, profile_out, labels_arr[keep_idx], names_arr[keep_idx]
+
+
+def _normalize_profile_parcel_axis_first(profile, n_labels, prefix, modality):
+    if profile is None:
+        return None
+    profile_arr = np.asarray(profile)
+    if profile_arr.ndim == 0 or n_labels <= 0:
+        return profile_arr
+
+    if profile_arr.shape[0] == n_labels:
+        return profile_arr
+    if profile_arr.ndim >= 2 and profile_arr.shape[1] == n_labels:
+        profile_arr = np.moveaxis(profile_arr, 1, 0)
+        debug.info(f"{prefix} moved {modality} profile parcel axis from 1 to 0: {profile_arr.shape}")
+        return profile_arr
+    if profile_arr.ndim >= 3 and profile_arr.shape[2] == n_labels:
+        profile_arr = np.moveaxis(profile_arr, 2, 0)
+        debug.info(f"{prefix} moved {modality} profile parcel axis from 2 to 0: {profile_arr.shape}")
+        return profile_arr
+    debug.warning(
+        f"{prefix} could not normalize {modality} profile with shape {profile_arr.shape}; "
+        f"no axis matched {n_labels} parcel labels."
+    )
+    return profile_arr
+
+
+def _pad_profiles_to_common_tail(profiles, prefix, modality):
+    arrays = [np.asarray(profile) for profile in profiles if profile is not None]
+    if not arrays:
+        return profiles
+
+    max_ndim = max(arr.ndim for arr in arrays)
+    if max_ndim < 2:
+        return [np.asarray(profile) if profile is not None else profile for profile in profiles]
+
+    max_tail = []
+    for axis in range(1, max_ndim):
+        axis_max = 1
+        for arr in arrays:
+            if arr.ndim > axis:
+                axis_max = max(axis_max, int(arr.shape[axis]))
+        max_tail.append(axis_max)
+    max_tail = tuple(max_tail)
+
+    padded = []
+    changed = False
+    for profile in profiles:
+        if profile is None:
+            padded.append(None)
+            continue
+        arr = np.asarray(profile)
+        target_shape = (arr.shape[0],) + max_tail
+        if tuple(arr.shape[1:]) == max_tail:
+            padded.append(arr)
+            continue
+        out = np.zeros(target_shape, dtype=arr.dtype)
+        slices = [slice(None)]
+        for axis in range(1, arr.ndim):
+            slices.append(slice(0, arr.shape[axis]))
+        out[tuple(slices)] = arr
+        padded.append(out)
+        changed = True
+    if changed:
+        debug.info(f"{prefix} padded {modality} profiles to common trailing shape {max_tail}.")
+    return padded
+
+
 def _load_connectivity_archive(con_path, allow_pickle=True):
     con_path = str(con_path)
     if not exists(con_path):
@@ -284,7 +550,8 @@ def _load_connectivity_archive(con_path, allow_pickle=True):
 def main(con_path_list,covar_df,modality,matrix_outpath,
          ignore_parc_list=[],qmask_path=None,mrsi_cov=0.67,
          comp_gradients=True,parcellation_img_path=None,
-         parcel_labels_retain=[]):
+         parcel_labels_retain=[],include_parcels=False,
+         include_parcels_start=0,include_parcels_end=None):
     if not con_path_list:
         return "No connectivity paths were provided."
 
@@ -302,7 +569,7 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
     npert = 1
     filename = split(matrix_outpath)[1]
     resultssubdir = split(matrix_outpath)[0]
-    retained_labels = list(parcel_labels_retain or [])
+    retained_labels = _coerce_label_list(parcel_labels_retain)
     skipped_archives = []
 
     for con_path in track(con_path_list, total=len(con_path_list), description="Extracting matrix..."):
@@ -345,6 +612,25 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
                     ),
                 )
 
+            matrix, profile, parcel_labels, parcel_names = _compact_matrix_to_parcel_labels(
+                matrix,
+                profile,
+                parcel_labels,
+                parcel_names,
+                prefix,
+            )
+            if include_parcels and not retained_labels:
+                retained_labels = _labels_between_bounds(
+                    parcel_labels,
+                    include_parcels_start,
+                    include_parcels_end,
+                    prefix=f"{prefix} template",
+                ).tolist()
+                debug.info(
+                    f"{prefix} using template range [{include_parcels_start}.."
+                    f"{include_parcels_end if include_parcels_end is not None else include_parcels_start}] "
+                    f"with {len(retained_labels)} labels."
+                )
             matrix, profile, parcel_labels, parcel_names = _retain_parcel_labels(
                 matrix,
                 profile,
@@ -353,7 +639,24 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
                 retained_labels,
                 prefix,
             )
-
+            # Crop matrix, node signal and label space
+            matrix, profile, parcel_labels, parcel_names = _crop_parcel_label_space(
+                matrix,
+                profile,
+                parcel_labels,
+                parcel_names,
+                include_parcels,
+                include_parcels_start,
+                include_parcels_end,
+                prefix,
+            )
+            if modality == "func":
+                profile = _normalize_profile_parcel_axis_first(
+                    profile,
+                    len(parcel_labels),
+                    prefix,
+                    modality,
+                )
             matrix_subjects_list.append(np.asarray(matrix))
             node_signals_subjects.append(np.asarray(profile))
             parcel_labels_list.append(np.asarray(parcel_labels))
@@ -381,10 +684,18 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
     if modality != "mrsi":
         npert = 1
 
+
     ##### Match matrix rows/cols along their parcel lists #####
     matrix_subjects_list, parcel_labels_group, parcel_names_group = mesim.create_pop_matrix(
         matrix_subjects_list, parcel_labels_list, parcel_names_list
     )
+
+    if modality == "func":
+        node_signals_subjects = _pad_profiles_to_common_tail(
+            node_signals_subjects,
+            prefix=f"{group}:{modality}",
+            modality=modality,
+        )
 
     aligned_node_signals = mesim.create_pop_profiles(
         node_signals_subjects,
@@ -424,7 +735,7 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
 
     ########## Clean simmilarity matrices ##########
     # Diascard sparse subjects matrix from average 
-    debug.title("Exclude sparse within-subject-wise MeSiMs")
+    debug.title("Exclude sparse within-subject-wise matrices")
     matrix_list_sel,i,e = filter_sparse_matrices(matrix_subjects_list,sigma=3)
     node_signals_subjects_sel = np.delete(node_signals_subjects,e,axis=0)
     session_id_arr_sel      = np.delete(session_list_found,e,axis=0)
@@ -432,7 +743,7 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
     matrix_list_sel          = np.array(matrix_list_sel)
     discarded_subjects      = [subject_id_list_found[idx] for idx in np.array(e)]
     discarded_sessions      = [session_list_found[idx] for idx in np.array(e)]
-    debug.info(f"Excluded {len(e)} sparse MeSiMs of shape, remaining {matrix_list_sel.shape[0]}")
+    debug.info(f"Excluded {len(e)} sparse matrices of shape, remaining {matrix_list_sel.shape[0]}")
     for sub,ses in zip(discarded_subjects,discarded_sessions):
         debug.info(sub,ses,"was left out")
 
@@ -491,9 +802,10 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
     matrix_pop_avg                 = matrix_list_sel.mean(axis=0)
     # Cleanup empty nodes
     mask_parcel_indices = list(np.where(np.diag(matrix_pop_avg) == 0)[0]) if modality=="mrsi" else []
-    nonzero_frac = np.mean(~np.isclose(matrix_list_sel, 0, atol=1e-10), axis=(0, 2))  # per node
-    mask_parcel_indices.extend(np.where(nonzero_frac < 0.05)[0])  # tune threshold
-    mask_parcel_indices = np.unique(np.array(mask_parcel_indices))
+    if modality in ["mrsi","func"]:
+        nonzero_frac = np.mean(~np.isclose(matrix_list_sel, 0, atol=1e-10), axis=(0, 2))  # per node
+        mask_parcel_indices.extend(np.where(nonzero_frac < 0.05)[0])  # tune threshold
+        mask_parcel_indices = np.unique(np.array(mask_parcel_indices))
     # delete rowd/cols of empty correlations 
     if len(mask_parcel_indices)!=0:
         _matrix_pop_avg_clean          = np.delete(matrix_pop_avg, mask_parcel_indices, axis=0)

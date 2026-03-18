@@ -1,0 +1,19 @@
+MRSI_SEQ	Cohort	State	Sex	Age	Diag
+SEQ_A	SiteA	baseline	0	24	0
+SEQ_A	SiteA	followup	1	26	0
+SEQ_B	SiteB	baseline	0	28	0
+SEQ_B	SiteB	followup	1	29	0
+SEQ_C	SiteA	baseline	0	31	0
+SEQ_C	SiteA	followup		30	0
+SEQ_A	SiteA	baseline	1	33	1
+SEQ_A	SiteA	followup	1	35	1
+SEQ_B	SiteB	baseline	0	36	1
+SEQ_B	SiteB	followup	1	38	1
+SEQ_C	SiteA	baseline	1	39	1
+SEQ_C	SiteA	followup	0		1
+SEQ_A	SiteA	baseline	1	42	2
+SEQ_A	SiteA	followup	1	44	2
+SEQ_B	SiteB	baseline	0	45	2
+SEQ_B	SiteB	followup	1	47	2
+SEQ_C	SiteA	baseline	1	49	2
+SEQ_C	SiteA	followup	0	50	2

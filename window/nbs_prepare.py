@@ -101,10 +101,24 @@ def _decode_scalar(value):
 
 
 def _display_text(value):
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            value = value.item()
+        elif value.size == 1:
+            value = value.reshape(-1)[0]
     value = _decode_scalar(value)
     if value is None:
         return ""
     return str(value)
+
+
+def _make_toggle_button(text="", checked=False, object_name="tableToggleButton"):
+    button = QPushButton(text)
+    button.setObjectName(str(object_name))
+    button.setCheckable(True)
+    button.setChecked(bool(checked))
+    button.setFixedSize(22, 22)
+    return button
 
 
 def _covars_to_rows(covars_info):
@@ -196,6 +210,35 @@ def _slugify_fragment(value):
     return slug or "value"
 
 
+def _connectivity_file_metadata(path: Path) -> dict:
+    base_name = Path(path).name
+    results = {}
+    patterns = {
+        "atlas": r"atlas-([^_]+)",
+        "scale": r"scale(\d+)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, base_name)
+        results[key] = match.group(1) if match else None
+    if results["scale"] is not None:
+        try:
+            results["scale"] = int(results["scale"])
+        except Exception:
+            results["scale"] = None
+    return results
+
+
+def _connectivity_atlas_string(path: Path) -> str:
+    meta = _connectivity_file_metadata(Path(path))
+    atlas = str(meta.get("atlas") or "").strip()
+    scale = meta.get("scale")
+    if atlas and scale is not None and f"scale{scale}" not in atlas:
+        return f"{atlas}_scale{scale}"
+    if atlas:
+        return atlas
+    return "unknown"
+
+
 class NBSPrepareDialog(QDialog):
     """Dialog to prepare NBS covariates and select filtered row subsets."""
 
@@ -232,6 +275,8 @@ class NBSPrepareDialog(QDialog):
         self._theme_name = "Dark"
         self._source_group = None
         self._source_modality = None
+        self._source_atlas_string = _connectivity_atlas_string(self._source_path)
+        self._output_dir_auto_value = ""
         self._last_result_npz_path = None
         self._last_nbs_summary = None
         self._export_process = None
@@ -240,7 +285,8 @@ class NBSPrepareDialog(QDialog):
         self._filtered_indices = list(range(len(self._rows)))
         self._excluded_indices = set()
         self._covar_checks = {}
-        self._role_combos = {}
+        self._confound_buttons = {}
+        self._regressor_buttons = {}
         self._last_run_payload = None
         self._run_process = None
         self._run_output_tail = []
@@ -260,6 +306,39 @@ class NBSPrepareDialog(QDialog):
         self._refresh_table()
         self._update_test_options()
         self._update_run_state()
+
+    def _default_results_root(self) -> Path:
+        if self._output_dir_default:
+            return Path(self._output_dir_default).expanduser()
+        if self._source_path is not None:
+            return self._source_path.parent
+        return Path.cwd()
+
+    def _default_output_dir_for_context(self, modality_text=None) -> str:
+        group = _slugify_fragment(self._source_group or "group")
+        modality = str(modality_text or "").strip().lower()
+        if not modality:
+            modality = str(self._source_modality or "mrsi").strip().lower() or "mrsi"
+        modality = _slugify_fragment(modality)
+        atlas_string = _slugify_fragment(self._source_atlas_string or "unknown")
+        return str(self._default_results_root() / "nbs" / group / modality / atlas_string)
+
+    def _is_output_dir_auto_managed(self) -> bool:
+        if not hasattr(self, "output_dir_edit"):
+            return False
+        current = self.output_dir_edit.text().strip()
+        auto_value = str(self._output_dir_auto_value or "").strip()
+        return (not current) or (auto_value and current == auto_value)
+
+    def _refresh_default_output_dir(self, *_args, force=False) -> None:
+        if not hasattr(self, "output_dir_edit"):
+            return
+        if not force and not self._is_output_dir_auto_managed():
+            return
+        modality = self.modality_combo.currentText().strip().lower() if hasattr(self, "modality_combo") else ""
+        default_output = self._default_output_dir_for_context(modality)
+        self.output_dir_edit.setText(default_output)
+        self._output_dir_auto_value = default_output
 
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
@@ -385,7 +464,6 @@ class NBSPrepareDialog(QDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             for col_idx in range(1, len(self._columns) + 1):
                 header.setSectionResizeMode(col_idx, QHeaderView.Stretch)
-        self.table.itemChanged.connect(self._on_data_table_item_changed)
         layout.addWidget(self.table, 1)
 
         bottom = QHBoxLayout()
@@ -400,31 +478,35 @@ class NBSPrepareDialog(QDialog):
         layout = QVBoxLayout(page)
 
         self.model_table = QTableWidget()
-        self.model_table.setColumnCount(4)
-        self.model_table.setHorizontalHeaderLabels(["Include", "Name", "Type", "Role"])
+        self.model_table.setColumnCount(5)
+        self.model_table.setHorizontalHeaderLabels(["Include", "Name", "Type", "Confound", "Regressor"])
         self.model_table.setRowCount(len(self._columns))
         if QT_LIB == 6:
             self.model_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             self.model_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             self.model_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
             self.model_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            self.model_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         else:
             self.model_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
             self.model_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             self.model_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
             self.model_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            self.model_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.model_table.setAlternatingRowColors(True)
         self.model_table.setSelectionBehavior(QAbstractItemView.SelectRows if QT_LIB == 5 else QAbstractItemView.SelectionBehavior.SelectRows)
         self.model_table.setSelectionMode(QAbstractItemView.SingleSelection if QT_LIB == 5 else QAbstractItemView.SelectionMode.SingleSelection)
 
         self._covar_checks = {}
-        self._role_combos = {}
+        self._confound_buttons = {}
+        self._regressor_buttons = {}
         self._model_updating = True
         for row_idx, covar_name in enumerate(self._columns):
-            include_item = QTableWidgetItem("")
-            include_item.setFlags(_is_enabled_flag() | _is_user_checkable_flag())
-            include_item.setCheckState(Qt.Unchecked)
-            self.model_table.setItem(row_idx, 0, include_item)
+            include_button = _make_toggle_button()
+            include_button.clicked.connect(
+                lambda _checked=False, name=covar_name: self._on_include_model_toggled(name)
+            )
+            self.model_table.setCellWidget(row_idx, 0, include_button)
 
             name_item = QTableWidgetItem(covar_name)
             name_item.setFlags(name_item.flags() & ~_is_editable_flag())
@@ -434,18 +516,23 @@ class NBSPrepareDialog(QDialog):
             type_item.setFlags(type_item.flags() & ~_is_editable_flag())
             self.model_table.setItem(row_idx, 2, type_item)
 
-            role_combo = QComboBox()
-            role_combo.addItems(self.ROLE_OPTIONS)
-            role_combo.setCurrentText("Ignore")
-            role_combo.currentTextChanged.connect(
-                lambda value, name=covar_name: self._on_role_changed(name, value)
+            confound_button = _make_toggle_button()
+            confound_button.clicked.connect(
+                lambda _checked=False, name=covar_name: self._on_role_button_clicked(name, "Confound")
             )
-            self.model_table.setCellWidget(row_idx, 3, role_combo)
+            self.model_table.setCellWidget(row_idx, 3, confound_button)
 
-            self._covar_checks[covar_name] = include_item
-            self._role_combos[covar_name] = role_combo
+            regressor_button = _make_toggle_button()
+            regressor_button.clicked.connect(
+                lambda _checked=False, name=covar_name: self._on_role_button_clicked(name, "Regressor")
+            )
+            self.model_table.setCellWidget(row_idx, 4, regressor_button)
+
+            self._covar_checks[covar_name] = include_button
+            self._confound_buttons[covar_name] = confound_button
+            self._regressor_buttons[covar_name] = regressor_button
+            self._sync_model_row_buttons(covar_name, emit_update=False)
         self._model_updating = False
-        self.model_table.itemChanged.connect(self._on_model_table_item_changed)
         layout.addWidget(self.model_table, 1)
 
         model_controls = QHBoxLayout()
@@ -513,6 +600,8 @@ class NBSPrepareDialog(QDialog):
             self.modality_combo.setCurrentText(source_modality)
         else:
             self.modality_combo.setCurrentText("mrsi")
+        self.modality_combo.currentTextChanged.connect(self._refresh_default_output_dir)
+        self.modality_combo.currentTextChanged.connect(self._update_run_summary)
         core_grid.addWidget(self.modality_combo, 2, 3)
 
         core_grid.addWidget(QLabel("Engine"), 3, 0)
@@ -572,7 +661,13 @@ class NBSPrepareDialog(QDialog):
         output_grid.addWidget(self.parcellation_browse_button, 0, 3)
 
         output_grid.addWidget(QLabel("Output folder"), 1, 0)
-        self.output_dir_edit = QLineEdit(self._output_dir_default or str(self._source_path.parent))
+        initial_output_dir = self._default_output_dir_for_context(
+            self.modality_combo.currentText().strip().lower()
+            if hasattr(self, "modality_combo")
+            else ""
+        )
+        self._output_dir_auto_value = initial_output_dir
+        self.output_dir_edit = QLineEdit(initial_output_dir)
         output_grid.addWidget(self.output_dir_edit, 1, 1, 1, 2)
         self.output_dir_button = QPushButton("Browse")
         self.output_dir_button.clicked.connect(self._browse_output_dir)
@@ -679,16 +774,11 @@ class NBSPrepareDialog(QDialog):
             return "numeric"
         return "categorical"
 
-    def _on_data_table_item_changed(self, item):
-        if item is None or self._data_table_refreshing:
+    def _on_exclude_row_toggled(self, source_idx, checked):
+        if self._data_table_refreshing:
             return
-        if item.column() != 0:
-            return
-        row = item.row()
-        if row < 0 or row >= len(self._filtered_indices):
-            return
-        source_idx = self._filtered_indices[row]
-        if item.checkState() == Qt.Checked:
+        source_idx = int(source_idx)
+        if checked:
             self._excluded_indices.add(source_idx)
         else:
             self._excluded_indices.discard(source_idx)
@@ -698,34 +788,18 @@ class NBSPrepareDialog(QDialog):
         self._update_run_summary()
 
     def _on_model_table_item_changed(self, item):
-        if item is None or self._model_updating:
-            return
-        if item.column() != 0:
-            return
-        row = item.row()
-        if row < 0 or row >= len(self._columns):
-            return
-        covar_name = self._columns[row]
-        role_combo = self._role_combos.get(covar_name)
-        if role_combo is None:
-            return
-        checked = item.checkState() == Qt.Checked
-        if not checked and role_combo.currentText() != "Ignore":
-            self._model_updating = True
-            role_combo.setCurrentText("Ignore")
-            self._model_updating = False
-        self._update_test_options()
-        self._update_run_state()
-        self._update_run_summary()
+        _ = item
+        return
 
     def _on_test_type_changed(self, *_args):
         self._update_run_summary()
 
     def _browse_output_dir(self):
-        start_dir = self.output_dir_edit.text().strip() or self._output_dir_default or str(self._source_path.parent)
+        start_dir = self.output_dir_edit.text().strip() or self._default_output_dir_for_context()
         selected = QFileDialog.getExistingDirectory(self, "Select output folder", start_dir)
         if selected:
             self.output_dir_edit.setText(selected)
+            self._output_dir_auto_value = ""
 
     def _selected_engine(self):
         if not hasattr(self, "engine_combo"):
@@ -873,6 +947,22 @@ class NBSPrepareDialog(QDialog):
         if theme not in {"Light", "Dark", "Teya", "Donald"}:
             theme = "Dark"
         self._theme_name = theme
+        toggle_style = (
+            "QPushButton#tableToggleButton { "
+            "min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; "
+            "background: transparent; color: transparent; border: 1px solid #94a3b8; border-radius: 5px; } "
+            "QPushButton#tableToggleButton:hover { border: 1px solid #64748b; background: rgba(148, 163, 184, 0.12); } "
+            "QPushButton#tableToggleButton:checked { background: #16a34a; color: transparent; border: 1px solid #86efac; } "
+            "QPushButton#tableToggleButton:disabled { background: transparent; color: transparent; border: 1px solid #cbd5e1; } "
+            "QPushButton#tableToggleButton:checked:disabled { background: #86efac; color: transparent; border: 1px solid #86efac; } "
+            "QPushButton#tableExcludeButton { "
+            "min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; "
+            "background: transparent; color: transparent; border: 1px solid #94a3b8; border-radius: 5px; } "
+            "QPushButton#tableExcludeButton:hover { border: 1px solid #64748b; background: rgba(148, 163, 184, 0.12); } "
+            "QPushButton#tableExcludeButton:checked { background: #dc2626; color: transparent; border: 1px solid #fca5a5; } "
+            "QPushButton#tableExcludeButton:disabled { background: transparent; color: transparent; border: 1px solid #cbd5e1; } "
+            "QPushButton#tableExcludeButton:checked:disabled { background: #fca5a5; color: transparent; border: 1px solid #fca5a5; } "
+        )
         if theme == "Dark":
             style = (
                 "QWidget { background: #1f2430; color: #e5e7eb; font-size: 11pt; } "
@@ -925,7 +1015,7 @@ class NBSPrepareDialog(QDialog):
                 "QHeaderView::section { background: #eef2f7; color: #1f2937; border: 1px solid #c9d0da; } "
                 "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
             )
-        self.setStyleSheet(style)
+        self.setStyleSheet(style + toggle_style)
         self._apply_terminal_style()
 
     def _process_is_running(self):
@@ -1112,39 +1202,66 @@ class NBSPrepareDialog(QDialog):
         self._update_run_state()
         self._update_run_summary()
 
-    def _on_role_changed(self, covar_name, role_value):
+    def _on_include_model_toggled(self, covar_name):
+        self._sync_model_row_buttons(covar_name, emit_update=True)
+
+    def _on_role_button_clicked(self, covar_name, role_value):
         if self._model_updating:
             return
-        include_item = self._covar_checks.get(covar_name)
-        role_combo = self._role_combos.get(covar_name)
-        if include_item is None or role_combo is None:
+        include_button = self._covar_checks.get(covar_name)
+        confound_button = self._confound_buttons.get(covar_name)
+        regressor_button = self._regressor_buttons.get(covar_name)
+        if include_button is None or confound_button is None or regressor_button is None:
             return
 
         self._model_updating = True
+        include_button.setChecked(True)
         if role_value == "Regressor":
-            for other_name, other_combo in self._role_combos.items():
+            confound_button.setChecked(False)
+            regressor_button.setChecked(True)
+            for other_name, other_button in self._regressor_buttons.items():
                 if other_name == covar_name:
                     continue
-                if other_combo.currentText() == "Regressor":
-                    other_combo.blockSignals(True)
-                    other_combo.setCurrentText("Ignore")
-                    other_combo.blockSignals(False)
-                    other_item = self._covar_checks.get(other_name)
-                    if other_item is not None:
-                        other_item.setCheckState(Qt.Unchecked)
-            include_item.setCheckState(Qt.Checked)
+                other_button.setChecked(False)
             self._set_status(f"Regressor set to: {covar_name}")
         elif role_value == "Confound":
-            include_item.setCheckState(Qt.Checked)
+            confound_button.setChecked(True)
+            regressor_button.setChecked(False)
             self._set_status("Confounds updated.")
         else:
-            include_item.setCheckState(Qt.Unchecked)
+            confound_button.setChecked(False)
+            regressor_button.setChecked(False)
             self._set_status("Roles updated.")
         self._model_updating = False
+
+        self._sync_model_row_buttons(covar_name, emit_update=False)
 
         self._update_test_options()
         self._update_run_state()
         self._update_run_summary()
+
+    def _sync_model_row_buttons(self, covar_name, emit_update=True):
+        include_button = self._covar_checks.get(covar_name)
+        confound_button = self._confound_buttons.get(covar_name)
+        regressor_button = self._regressor_buttons.get(covar_name)
+        if include_button is None or confound_button is None or regressor_button is None:
+            return
+
+        include_checked = bool(include_button.isChecked())
+        confound_button.setEnabled(include_checked)
+        regressor_button.setEnabled(include_checked)
+        if not include_checked:
+            confound_button.setChecked(False)
+            regressor_button.setChecked(False)
+        elif confound_button.isChecked():
+            regressor_button.setChecked(False)
+        elif regressor_button.isChecked():
+            confound_button.setChecked(False)
+
+        if emit_update:
+            self._update_test_options()
+            self._update_run_state()
+            self._update_run_summary()
 
     def _match_value(self, source_value, target_text, numeric):
         text = _display_text(source_value).strip()
@@ -1217,19 +1334,18 @@ class NBSPrepareDialog(QDialog):
         self._data_table_refreshing = True
         self.table.blockSignals(True)
         self.table.setRowCount(len(self._filtered_indices))
-        enabled_flag = _is_enabled_flag()
-        selectable_flag = _is_selectable_flag()
-        checkable_flag = _is_user_checkable_flag()
         editable_flag = _is_editable_flag()
         for table_row, source_idx in enumerate(self._filtered_indices):
             row_data = self._rows[source_idx]
 
-            include_item = QTableWidgetItem("")
-            include_item.setFlags(enabled_flag | selectable_flag | checkable_flag)
-            include_item.setCheckState(
-                Qt.Checked if source_idx in self._excluded_indices else Qt.Unchecked
+            exclude_button = _make_toggle_button(
+                checked=(source_idx in self._excluded_indices),
+                object_name="tableExcludeButton",
             )
-            self.table.setItem(table_row, 0, include_item)
+            exclude_button.clicked.connect(
+                lambda checked=False, idx=source_idx: self._on_exclude_row_toggled(idx, checked)
+            )
+            self.table.setCellWidget(table_row, 0, exclude_button)
 
             for col_idx, covar_name in enumerate(self._columns, start=1):
                 item = QTableWidgetItem(_display_text(row_data.get(covar_name)))
@@ -1894,16 +2010,17 @@ class NBSPrepareDialog(QDialog):
         selected_columns = []
         nuisance = []
         regressor = None
-        for covar_name, include_item in self._covar_checks.items():
-            if include_item.checkState() != Qt.Checked:
+        for covar_name, include_button in self._covar_checks.items():
+            if include_button is None or not include_button.isChecked():
                 continue
-            role = self._role_combos[covar_name].currentText()
-            if role == "Ignore":
+            is_confound = bool(self._confound_buttons.get(covar_name).isChecked()) if self._confound_buttons.get(covar_name) is not None else False
+            is_regressor = bool(self._regressor_buttons.get(covar_name).isChecked()) if self._regressor_buttons.get(covar_name) is not None else False
+            if not is_confound and not is_regressor:
                 continue
             selected_columns.append(covar_name)
-            if role == "Confound":
+            if is_confound:
                 nuisance.append(covar_name)
-            elif role == "Regressor":
+            elif is_regressor:
                 regressor = covar_name
         return {
             "selected_columns": selected_columns,

@@ -107,6 +107,15 @@ def _display_text(value):
     return str(value)
 
 
+def _make_toggle_button(text: str = "", checked: bool = False, object_name: str = "tableToggleButton") -> QPushButton:
+    button = QPushButton(text)
+    button.setObjectName(str(object_name))
+    button.setCheckable(True)
+    button.setChecked(bool(checked))
+    button.setFixedSize(22, 22)
+    return button
+
+
 def _covars_to_rows(covars_info):
     if covars_info is None:
         return [], []
@@ -213,6 +222,7 @@ class HarmonizePrepareDialog(QDialog):
         self._last_run = None
         self._last_output_path = None
         self._output_name_auto = True
+        self._confound_controls = {}
 
         self._harm_mod = _load_harmonize_module()
 
@@ -318,7 +328,6 @@ class HarmonizePrepareDialog(QDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             for col_idx in range(1, len(self._columns) + 1):
                 header.setSectionResizeMode(col_idx, QHeaderView.Stretch)
-        self.data_table.itemChanged.connect(self._on_data_table_item_changed)
         layout.addWidget(self.data_table, 1)
 
         self.showing_rows_label = QLabel("")
@@ -341,8 +350,8 @@ class HarmonizePrepareDialog(QDialog):
         model_layout.addLayout(batch_row)
 
         self.confound_table = QTableWidget()
-        self.confound_table.setColumnCount(3)
-        self.confound_table.setHorizontalHeaderLabels(["Include", "Covariate", "Type"])
+        self.confound_table.setColumnCount(4)
+        self.confound_table.setHorizontalHeaderLabels(["Include", "Covariate", "Continuous", "Categorical"])
         self.confound_table.setRowCount(len(self._columns))
         self.confound_table.setAlternatingRowColors(True)
         if QT_LIB == 6:
@@ -350,6 +359,7 @@ class HarmonizePrepareDialog(QDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
             self.confound_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.confound_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         else:
@@ -357,6 +367,7 @@ class HarmonizePrepareDialog(QDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
             self.confound_table.setSelectionBehavior(QAbstractItemView.SelectRows)
             self.confound_table.setSelectionMode(QAbstractItemView.SingleSelection)
         model_layout.addWidget(self.confound_table, 1)
@@ -377,7 +388,7 @@ class HarmonizePrepareDialog(QDialog):
         output_group = QGroupBox("Output")
         out_grid = QGridLayout(output_group)
         out_grid.addWidget(QLabel("Output folder"), 0, 0)
-        self.output_dir_edit = QLineEdit(self._output_dir_default or str(self._source_path.parent))
+        self.output_dir_edit = QLineEdit(str(self._source_path.parent))
         out_grid.addWidget(self.output_dir_edit, 0, 1)
         self.output_dir_button = QPushButton("Browse")
         self.output_dir_button.clicked.connect(self._browse_output_dir)
@@ -385,7 +396,7 @@ class HarmonizePrepareDialog(QDialog):
 
         out_grid.addWidget(QLabel("Output file"), 1, 0)
         self.output_name_edit = QLineEdit("")
-        self.output_name_edit.setPlaceholderText("harmonized_connmat.npz")
+        self.output_name_edit.setPlaceholderText("harmonized_connectivity.npz")
         self.output_name_edit.textEdited.connect(self._on_output_name_edited)
         out_grid.addWidget(self.output_name_edit, 1, 1, 1, 2)
 
@@ -433,6 +444,7 @@ class HarmonizePrepareDialog(QDialog):
 
         self.result_figure = Figure(figsize=(10, 6))
         self.result_canvas = FigureCanvas(self.result_figure)
+        self.result_canvas.setVisible(False)
         run_layout.addWidget(self.result_canvas, 1)
         layout.addWidget(run_group, 1)
 
@@ -540,16 +552,11 @@ class HarmonizePrepareDialog(QDialog):
             return any(np.isclose(value, target) for target in targets)
         return text in targets
 
-    def _on_data_table_item_changed(self, item):
-        if item is None or self._data_table_refreshing:
+    def _on_exclude_row_toggled(self, source_idx, checked):
+        if self._data_table_refreshing:
             return
-        if item.column() != 0:
-            return
-        row = item.row()
-        if row < 0 or row >= len(self._filtered_indices):
-            return
-        source_idx = self._filtered_indices[row]
-        if item.checkState() == Qt.Checked:
+        source_idx = int(source_idx)
+        if checked:
             self._excluded_indices.add(source_idx)
         else:
             self._excluded_indices.discard(source_idx)
@@ -610,16 +617,17 @@ class HarmonizePrepareDialog(QDialog):
         self._data_table_refreshing = True
         self.data_table.blockSignals(True)
         self.data_table.setRowCount(len(self._filtered_indices))
-        enabled_flag = _is_enabled_flag()
-        selectable_flag = _is_selectable_flag()
-        checkable_flag = _is_user_checkable_flag()
         editable_flag = _is_editable_flag()
         for table_row, source_idx in enumerate(self._filtered_indices):
             row_data = self._rows[source_idx]
-            include_item = QTableWidgetItem("")
-            include_item.setFlags(enabled_flag | selectable_flag | checkable_flag)
-            include_item.setCheckState(Qt.Checked if source_idx in self._excluded_indices else Qt.Unchecked)
-            self.data_table.setItem(table_row, 0, include_item)
+            exclude_button = _make_toggle_button(
+                checked=(source_idx in self._excluded_indices),
+                object_name="tableExcludeButton",
+            )
+            exclude_button.clicked.connect(
+                lambda checked=False, idx=source_idx: self._on_exclude_row_toggled(idx, checked)
+            )
+            self.data_table.setCellWidget(table_row, 0, exclude_button)
             for col_idx, covar_name in enumerate(self._columns, start=1):
                 item = QTableWidgetItem(_display_text(row_data.get(covar_name)))
                 item.setFlags(item.flags() & ~editable_flag)
@@ -663,44 +671,86 @@ class HarmonizePrepareDialog(QDialog):
         if default_batch and self.batch_combo.findText(default_batch) >= 0:
             self.batch_combo.setCurrentText(default_batch)
 
+        self._confound_controls = {}
         for row_idx, covar_name in enumerate(self._columns):
-            include_item = QTableWidgetItem("")
-            flags = _is_enabled_flag() | _is_user_checkable_flag() | _is_selectable_flag()
-            include_item.setFlags(flags)
-            include_item.setCheckState(Qt.Unchecked)
-            self.confound_table.setItem(row_idx, 0, include_item)
+            include_button = _make_toggle_button(checked=False)
+            include_button.clicked.connect(
+                lambda _checked=False, idx=row_idx: self._on_include_confound_toggled(idx)
+            )
+            self.confound_table.setCellWidget(row_idx, 0, include_button)
 
             name_item = QTableWidgetItem(covar_name)
             name_item.setFlags(name_item.flags() & ~_is_editable_flag())
             self.confound_table.setItem(row_idx, 1, name_item)
 
-            type_combo = QComboBox()
-            for option in self.TYPE_OPTIONS:
-                type_combo.addItem(option)
-            type_combo.setCurrentText(self._covariate_type(covar_name))
-            type_combo.currentTextChanged.connect(
-                lambda _value, self=self: self._apply_default_output_name(force=False)
+            continuous_button = _make_toggle_button(checked=False)
+            categorical_button = _make_toggle_button(checked=False)
+            continuous_button.clicked.connect(
+                lambda _checked=False, idx=row_idx: self._set_confound_type(idx, "continuous")
             )
-            self.confound_table.setCellWidget(row_idx, 2, type_combo)
+            categorical_button.clicked.connect(
+                lambda _checked=False, idx=row_idx: self._set_confound_type(idx, "categorical")
+            )
+            self.confound_table.setCellWidget(row_idx, 2, continuous_button)
+            self.confound_table.setCellWidget(row_idx, 3, categorical_button)
 
-            if self._is_id_like(covar_name):
-                include_item.setCheckState(Qt.Unchecked)
-
-        self.confound_table.itemChanged.connect(
-            lambda _item, self=self: self._apply_default_output_name(force=False)
-        )
+            self._confound_controls[row_idx] = {
+                "include": include_button,
+                "continuous": continuous_button,
+                "categorical": categorical_button,
+            }
+            self._sync_confound_row_buttons(row_idx, emit_update=False)
         self._apply_default_output_name(force=True)
+
+    def _on_include_confound_toggled(self, row_idx):
+        self._sync_confound_row_buttons(row_idx, emit_update=True)
+
+    def _set_confound_type(self, row_idx, covar_type: str):
+        controls = self._confound_controls.get(int(row_idx), {})
+        include_button = controls.get("include")
+        continuous_button = controls.get("continuous")
+        categorical_button = controls.get("categorical")
+        if include_button is None or continuous_button is None or categorical_button is None:
+            return
+        include_button.setChecked(True)
+        covar_type = str(covar_type or "").strip().lower()
+        is_continuous = covar_type == "continuous"
+        continuous_button.setChecked(is_continuous)
+        categorical_button.setChecked(not is_continuous)
+        self._sync_confound_row_buttons(row_idx, emit_update=True)
+
+    def _sync_confound_row_buttons(self, row_idx, emit_update=True):
+        controls = self._confound_controls.get(int(row_idx), {})
+        include_button = controls.get("include")
+        continuous_button = controls.get("continuous")
+        categorical_button = controls.get("categorical")
+        if include_button is None or continuous_button is None or categorical_button is None:
+            return
+
+        include_checked = bool(include_button.isChecked())
+        continuous_button.setEnabled(include_checked)
+        categorical_button.setEnabled(include_checked)
+        if not include_checked:
+            continuous_button.setChecked(False)
+            categorical_button.setChecked(False)
+        elif not (continuous_button.isChecked() or categorical_button.isChecked()):
+            default_type = self._covariate_type(self._columns[int(row_idx)])
+            continuous_button.setChecked(default_type == "continuous")
+            categorical_button.setChecked(default_type != "continuous")
+        if emit_update:
+            self._apply_default_output_name(force=False)
 
     def _selected_confounds(self):
         categorical = []
         continuous = []
         for row_idx, covar_name in enumerate(self._columns):
-            include_item = self.confound_table.item(row_idx, 0)
-            if include_item is None or include_item.checkState() != Qt.Checked:
+            controls = self._confound_controls.get(row_idx, {})
+            include_button = controls.get("include")
+            continuous_button = controls.get("continuous")
+            categorical_button = controls.get("categorical")
+            if include_button is None or not include_button.isChecked():
                 continue
-            combo = self.confound_table.cellWidget(row_idx, 2)
-            covar_type = combo.currentText().strip().lower() if combo is not None else "categorical"
-            if covar_type == "continuous":
+            if continuous_button is not None and continuous_button.isChecked():
                 continuous.append(covar_name)
             else:
                 categorical.append(covar_name)
@@ -717,28 +767,25 @@ class HarmonizePrepareDialog(QDialog):
         if (not force) and (not self._output_name_auto):
             self._refresh_output_path_preview()
             return
-        batch_col = self.batch_combo.currentText().strip() if hasattr(self, "batch_combo") else "batch"
-        categorical, continuous = self._selected_confounds() if hasattr(self, "confound_table") else ([], [])
-        apply_fisher = bool(self.fisher_checkbox.isChecked()) if hasattr(self, "fisher_checkbox") else False
         try:
             default_path = self._harm_mod.build_default_output_path(
                 source_path=self._source_path,
                 matrix_key=self._matrix_key,
-                batch_col=batch_col or "batch",
-                categorical_cols=categorical,
-                continuous_cols=continuous,
-                apply_fisher=apply_fisher,
+                batch_col=self.batch_combo.currentText().strip() if hasattr(self, "batch_combo") else "batch",
+                categorical_cols=self._selected_confounds()[0] if hasattr(self, "confound_table") else [],
+                continuous_cols=self._selected_confounds()[1] if hasattr(self, "confound_table") else [],
+                apply_fisher=bool(self.fisher_checkbox.isChecked()) if hasattr(self, "fisher_checkbox") else False,
                 output_dir=self.output_dir_edit.text().strip() if hasattr(self, "output_dir_edit") else self._source_path.parent,
             )
             self.output_name_edit.setText(default_path.name)
             self._output_name_auto = True
         except Exception:
             if force:
-                self.output_name_edit.setText("harmonized_connmat.npz")
+                self.output_name_edit.setText(f"{self._source_path.stem}_harmonized_connectivity_unknown.npz")
         self._refresh_output_path_preview()
 
     def _browse_output_dir(self):
-        start_dir = self.output_dir_edit.text().strip() or self._output_dir_default or str(self._source_path.parent)
+        start_dir = self.output_dir_edit.text().strip() or str(self._source_path.parent)
         selected = QFileDialog.getExistingDirectory(self, "Select output folder", start_dir)
         if selected:
             self.output_dir_edit.setText(selected)
@@ -746,7 +793,7 @@ class HarmonizePrepareDialog(QDialog):
 
     def _output_path(self) -> Path:
         out_dir = self.output_dir_edit.text().strip() or str(self._source_path.parent)
-        out_name = self.output_name_edit.text().strip() or "harmonized_connmat.npz"
+        out_name = self.output_name_edit.text().strip() or f"{self._source_path.stem}_harmonized_connectivity_unknown.npz"
         output_path = Path(out_dir).expanduser() / out_name
         if output_path.suffix.lower() != ".npz":
             output_path = output_path.with_suffix(".npz")
@@ -795,6 +842,9 @@ class HarmonizePrepareDialog(QDialog):
         self.run_summary_label.setText("Running...")
         if hasattr(self, "log_output") and self.log_output is not None:
             self.log_output.clear()
+        if hasattr(self, "result_canvas") and self.result_canvas is not None:
+            self.result_figure.clear()
+            self.result_canvas.setVisible(False)
         self._append_terminal_line(
             (
                 f"[HARMONIZE] Starting run for {self._source_path.name} "
@@ -846,8 +896,11 @@ class HarmonizePrepareDialog(QDialog):
                 batch_col=run["result"]["batch_col"],
                 figure=self.result_figure,
             )
+            self.result_canvas.setVisible(True)
             self.result_canvas.draw_idle()
         except Exception as exc:
+            self.result_figure.clear()
+            self.result_canvas.setVisible(False)
             self._append_terminal_line(f"[HARMONIZE] Plotting failed: {exc}")
             self._set_status(f"Harmonization complete, but plotting failed: {exc}")
 
@@ -909,6 +962,22 @@ class HarmonizePrepareDialog(QDialog):
         theme = str(theme_name or "Dark").strip().title()
         if theme not in {"Light", "Dark", "Teya", "Donald"}:
             theme = "Dark"
+        toggle_style = (
+            "QPushButton#tableToggleButton { "
+            "min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; "
+            "background: transparent; color: transparent; border: 1px solid #94a3b8; border-radius: 5px; } "
+            "QPushButton#tableToggleButton:hover { border: 1px solid #64748b; background: rgba(148, 163, 184, 0.12); } "
+            "QPushButton#tableToggleButton:checked { background: #16a34a; color: transparent; border: 1px solid #86efac; } "
+            "QPushButton#tableToggleButton:disabled { background: transparent; color: transparent; border: 1px solid #cbd5e1; } "
+            "QPushButton#tableToggleButton:checked:disabled { background: #86efac; color: transparent; border: 1px solid #86efac; } "
+            "QPushButton#tableExcludeButton { "
+            "min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; "
+            "background: transparent; color: transparent; border: 1px solid #94a3b8; border-radius: 5px; } "
+            "QPushButton#tableExcludeButton:hover { border: 1px solid #64748b; background: rgba(148, 163, 184, 0.12); } "
+            "QPushButton#tableExcludeButton:checked { background: #dc2626; color: transparent; border: 1px solid #fca5a5; } "
+            "QPushButton#tableExcludeButton:disabled { background: transparent; color: transparent; border: 1px solid #cbd5e1; } "
+            "QPushButton#tableExcludeButton:checked:disabled { background: #fca5a5; color: transparent; border: 1px solid #fca5a5; } "
+        )
         if theme == "Dark":
             style = (
                 "QWidget { background: #1f2430; color: #e5e7eb; font-size: 11pt; } "
@@ -961,7 +1030,7 @@ class HarmonizePrepareDialog(QDialog):
                 "QHeaderView::section { background: #eef2f7; color: #1f2937; border: 1px solid #c9d0da; } "
                 "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
             )
-        self.setStyleSheet(style)
+        self.setStyleSheet(style + toggle_style)
         self._apply_terminal_style()
 
 

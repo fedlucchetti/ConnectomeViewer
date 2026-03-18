@@ -23,13 +23,12 @@ except Exception:
     pd = None
 
 try:
-    from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
+    from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
     from PyQt6.QtWidgets import (
         QAbstractItemView,
         QApplication,
         QCheckBox,
         QComboBox,
-        QDialog,
         QDoubleSpinBox,
         QFileDialog,
         QGridLayout,
@@ -42,6 +41,7 @@ try:
         QPlainTextEdit,
         QPushButton,
         QSizePolicy,
+        QSpinBox,
         QTableWidget,
         QTableWidgetItem,
         QVBoxLayout,
@@ -49,13 +49,12 @@ try:
     )
     QT_LIB = 6
 except Exception:
-    from PyQt5.QtCore import QObject, QThread, Qt, pyqtSignal
+    from PyQt5.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
     from PyQt5.QtWidgets import (
         QAbstractItemView,
         QApplication,
         QCheckBox,
         QComboBox,
-        QDialog,
         QDoubleSpinBox,
         QFileDialog,
         QGridLayout,
@@ -68,6 +67,7 @@ except Exception:
         QPlainTextEdit,
         QPushButton,
         QSizePolicy,
+        QSpinBox,
         QTableWidget,
         QTableWidgetItem,
         QVBoxLayout,
@@ -123,6 +123,10 @@ def _is_user_checkable_flag():
 
 def _is_editable_flag():
     return getattr(Qt, "ItemIsEditable", getattr(Qt.ItemFlag, "ItemIsEditable"))
+
+
+def _copy_drop_action():
+    return getattr(Qt, "CopyAction", getattr(Qt.DropAction, "CopyAction"))
 
 
 def _size_policy_expanding():
@@ -197,6 +201,46 @@ def _column_is_numeric(values):
         except Exception:
             return False
     return has_value
+
+
+def _switch_checkbox_style(track_off: str, track_on: str, border_color: str) -> str:
+    return (
+        "QCheckBox#switchCheckBox { spacing: 10px; } "
+        "QCheckBox#switchCheckBox::indicator { width: 42px; height: 22px; border-radius: 11px; } "
+        f"QCheckBox#switchCheckBox::indicator:unchecked {{ background-color: {track_off}; border: 1px solid {border_color}; }} "
+        f"QCheckBox#switchCheckBox::indicator:checked {{ background-color: {track_on}; border: 1px solid {track_on}; }}"
+    )
+
+
+def _max_parcel_label_from_npz(npz_path) -> int:
+    try:
+        with np.load(str(npz_path), allow_pickle=True) as archive:
+            labels = None
+            for key in ("labels_indices", "parcel_labels"):
+                if key in archive:
+                    labels = np.asarray(archive[key]).reshape(-1)
+                    break
+            if labels is not None and labels.size > 0:
+                values = []
+                for value in labels:
+                    text = _display_text(value).strip()
+                    if text == "":
+                        continue
+                    try:
+                        values.append(int(float(text)))
+                    except Exception:
+                        continue
+                if values:
+                    return max(0, max(values))
+            for key in ("connectivity", "connectome_density", "simmatrix_sp"):
+                if key not in archive:
+                    continue
+                matrix = np.asarray(archive[key])
+                if matrix.ndim >= 2 and matrix.shape[-1] > 0:
+                    return max(0, int(matrix.shape[-1] - 1))
+    except Exception as exc:
+        _stack_diagnostic_log(f"Failed to inspect parcel labels in {npz_path}: {exc}")
+    return 0
 
 
 def _covars_to_rows(covars_df):
@@ -391,15 +435,25 @@ class TsvDropLabel(QLabel):
 
     def dragEnterEvent(self, event):
         if self._tsv_path_from_event(event):
-            event.acceptProposedAction()
+            try:
+                event.setDropAction(_copy_drop_action())
+            except Exception:
+                pass
+            event.accept()
             return
         event.ignore()
 
     def dropEvent(self, event):
         selected = self._tsv_path_from_event(event)
         if selected:
-            self.file_dropped.emit(str(selected))
-            event.acceptProposedAction()
+            queued_path = str(Path(selected))
+            try:
+                event.setDropAction(_copy_drop_action())
+            except Exception:
+                pass
+            event.accept()
+            # Defer heavy TSV loading until the DnD event has fully unwound.
+            QTimer.singleShot(0, lambda path=queued_path: self.file_dropped.emit(path))
             return
         event.ignore()
 
@@ -457,7 +511,8 @@ class CovarsSelectionWidget(QWidget):
         self._filtered_indices = []
         self._excluded_indices = set()
         self._table_refreshing = False
-        self.setAcceptDrops(True)
+        # Keep DnD handling on the dedicated input widget only.
+        self.setAcceptDrops(False)
         self._build_ui()
 
     def _build_ui(self):
@@ -468,8 +523,8 @@ class CovarsSelectionWidget(QWidget):
         root.addWidget(intro_label)
 
         top = QHBoxLayout()
-        self.tsv_drop_label = TsvDropLabel("Drop a .tsv file here or use Browse.")
-        self.tsv_drop_label.setWordWrap(True)
+        self.tsv_drop_label = FileDropLineEdit(accepted_suffixes=(".tsv",))
+        self.tsv_drop_label.setPlaceholderText("Drop a .tsv file here or use Browse.")
         self.tsv_drop_label.setStyleSheet("padding: 8px; border: 1px dashed #6b7280;")
         self.tsv_drop_label.file_dropped.connect(lambda path: self._load_covars_file(Path(path)))
         top.addWidget(self.tsv_drop_label, 1)
@@ -595,7 +650,8 @@ class CovarsSelectionWidget(QWidget):
         self._filtered_indices = []
         self._excluded_indices = set()
         self.covars_path_label.setText("No covars file loaded.")
-        self.tsv_drop_label.setText("Drop a .tsv file here or use Browse.")
+        self.tsv_drop_label.clear()
+        self.tsv_drop_label.setPlaceholderText("Drop a .tsv file here or use Browse.")
         self.filter_covar_combo.clear()
         self.table.clear()
         self.table.setRowCount(0)
@@ -633,6 +689,7 @@ class CovarsSelectionWidget(QWidget):
         self.filter_covar_combo.clear()
         self.filter_covar_combo.addItems(self._columns)
         self._refresh_table()
+        self.tsv_drop_label.setText(str(path))
         self.covars_path_label.setText(f"Loaded covars: {path}")
         if self._covars_error:
             self._set_status(self._covars_error)
@@ -643,7 +700,9 @@ class CovarsSelectionWidget(QWidget):
         _stack_diagnostic_log(
             f"CovarsSelectionWidget loaded TSV rows={len(self._rows)} cols={len(self._columns)} error={self._covars_error!r}"
         )
+        _stack_diagnostic_log("CovarsSelectionWidget emitting configuration_changed")
         self.configuration_changed.emit()
+        _stack_diagnostic_log("CovarsSelectionWidget emitted configuration_changed")
 
     def dragEnterEvent(self, event):
         event.ignore()
@@ -1004,6 +1063,7 @@ class StackPrepareDialog(QWidget):
         self._last_voxel_count_path = None
         self._last_external_validation_error = ""
         self._last_exit_code = None
+        self._include_parcel_label_max = 0
         self._detected_atlas = _atlas_tag_from_path(self._selected_paths[0]) if self._selected_paths else "unknown"
         self._detected_modality = (
             _infer_modality_from_path(self._selected_paths[0]) if self._selected_paths else "connectivity"
@@ -1055,10 +1115,12 @@ class StackPrepareDialog(QWidget):
         self.qmask_browse_button.clicked.connect(self._browse_qmask_file)
         options_layout.addWidget(self.qmask_browse_button, 1, 3)
 
-        self.parcellation_label = QLabel("Parcellation image")
+        self.parcellation_label = QLabel("Parcellation image (required)")
         options_layout.addWidget(self.parcellation_label, 2, 0)
         self.parcellation_path_edit = FileDropLineEdit(accepted_suffixes=(".nii", ".nii.gz"))
-        self.parcellation_path_edit.setPlaceholderText("NIfTI parcellation image (.nii or .nii.gz)")
+        self.parcellation_path_edit.setPlaceholderText(
+            "Required NIfTI parcellation image (.nii or .nii.gz)"
+        )
         self.parcellation_path_edit.textChanged.connect(self._sync_processing_options)
         self.parcellation_path_edit.textChanged.connect(self._update_process_enabled)
         options_layout.addWidget(self.parcellation_path_edit, 2, 1, 1, 2)
@@ -1066,7 +1128,8 @@ class StackPrepareDialog(QWidget):
         self.parcellation_browse_button.clicked.connect(self._browse_parcellation_file)
         options_layout.addWidget(self.parcellation_browse_button, 2, 3)
 
-        options_layout.addWidget(QLabel("MRSI coverage"), 3, 0)
+        self.mrsi_cov_label = QLabel("MRSI coverage")
+        options_layout.addWidget(self.mrsi_cov_label, 3, 0)
         self.mrsi_cov_spin = QDoubleSpinBox()
         self.mrsi_cov_spin.setRange(0.0, 1.0)
         self.mrsi_cov_spin.setSingleStep(0.01)
@@ -1075,12 +1138,43 @@ class StackPrepareDialog(QWidget):
         options_layout.addWidget(self.mrsi_cov_spin, 3, 1)
 
         self.compute_gradients_check = QCheckBox("Compute gradients")
+        self.compute_gradients_check.setObjectName("switchCheckBox")
         self.compute_gradients_check.setChecked(True)
         self.compute_gradients_check.toggled.connect(self._sync_processing_options)
         self.compute_gradients_check.toggled.connect(self._update_process_enabled)
-        options_layout.addWidget(self.compute_gradients_check, 3, 2, 1, 2)
+        options_layout.addWidget(self.compute_gradients_check, 4, 0, 1, 4)
+
+        self.include_parcels_row = QWidget()
+        include_parcels_layout = QHBoxLayout(self.include_parcels_row)
+        include_parcels_layout.setContentsMargins(0, 0, 0, 0)
+        include_parcels_layout.setSpacing(8)
+        self.include_parcels_check = QCheckBox("Include parcels")
+        self.include_parcels_check.setObjectName("switchCheckBox")
+        self.include_parcels_check.setChecked(False)
+        self.include_parcels_check.toggled.connect(self._sync_include_parcel_controls)
+        include_parcels_layout.addWidget(self.include_parcels_check)
+        self.include_parcels_start_label = QLabel("Start label")
+        include_parcels_layout.addWidget(self.include_parcels_start_label)
+        self.include_parcels_start_spin = QSpinBox()
+        self.include_parcels_start_spin.setRange(0, 0)
+        self.include_parcels_start_spin.setValue(1)
+        self.include_parcels_start_spin.setKeyboardTracking(False)
+        self.include_parcels_start_spin.valueChanged.connect(self._on_include_parcel_start_changed)
+        include_parcels_layout.addWidget(self.include_parcels_start_spin)
+        self.include_parcels_end_label = QLabel("End label")
+        include_parcels_layout.addWidget(self.include_parcels_end_label)
+        self.include_parcels_end_spin = QSpinBox()
+        self.include_parcels_end_spin.setRange(0, 0)
+        self.include_parcels_end_spin.setValue(0)
+        self.include_parcels_end_spin.setKeyboardTracking(False)
+        self.include_parcels_end_spin.valueChanged.connect(self._on_include_parcel_end_changed)
+        include_parcels_layout.addWidget(self.include_parcels_end_spin)
+        include_parcels_layout.addStretch(1)
+        options_layout.addWidget(self.include_parcels_row, 5, 0, 1, 4)
         root.addWidget(options_group)
 
+        self._refresh_include_parcel_defaults(force=True)
+        self._sync_include_parcel_controls()
         self._sync_processing_options()
 
         if self._include_covars_widget:
@@ -1165,6 +1259,7 @@ class StackPrepareDialog(QWidget):
         )
         self._detected_modalities = _modalities_from_paths(self._selected_paths)
         self._refresh_selection_summary()
+        self._refresh_include_parcel_defaults(force=True)
         self._sync_processing_options()
         if self._output_path_auto:
             self._set_default_output_path(force=True)
@@ -1257,29 +1352,70 @@ class StackPrepareDialog(QWidget):
             has_mrsi = str(self._detected_modality or "").strip().lower() == "mrsi"
         self.qmask_path_edit.setEnabled(has_mrsi)
         self.qmask_browse_button.setEnabled(has_mrsi)
-        self.mrsi_cov_spin.setEnabled(has_mrsi)
+        show_mrsi_cov = has_mrsi and bool(self.qmask_path_edit.text().strip())
+        self.mrsi_cov_label.setVisible(show_mrsi_cov)
+        self.mrsi_cov_spin.setVisible(show_mrsi_cov)
+        self.mrsi_cov_spin.setEnabled(show_mrsi_cov)
+        self._sync_include_parcel_controls()
         self._update_parcellation_requirement_ui()
 
     def _parcellation_required(self):
-        modalities = {str(item).strip().lower() for item in (self._detected_modalities or []) if str(item).strip()}
-        if not modalities:
-            modalities = {str(self._detected_modality or "").strip().lower()}
-        needs_qmask_space = "mrsi" in modalities and bool(self.qmask_path_edit.text().strip())
-        needs_gradients = bool(modalities.intersection({"mrsi", "func", "dwi"})) and self.compute_gradients_check.isChecked()
-        return needs_qmask_space or needs_gradients
+        return True
 
     def _update_parcellation_requirement_ui(self):
-        required = self._parcellation_required()
-        if required:
-            self.parcellation_label.setText("Parcellation image (required)")
-            self.parcellation_path_edit.setPlaceholderText(
-                "Required NIfTI parcellation image (.nii or .nii.gz)"
+        self.parcellation_label.setText("Parcellation image (required)")
+        self.parcellation_path_edit.setPlaceholderText(
+            "Required NIfTI parcellation image (.nii or .nii.gz)"
+        )
+
+    def _set_include_parcel_spin_bounds(self, start_value=None, end_value=None):
+        max_label = max(0, int(self._include_parcel_label_max))
+        if start_value is None:
+            start_value = self.include_parcels_start_spin.value()
+        if end_value is None:
+            end_value = self.include_parcels_end_spin.value()
+        start_value = max(0, min(int(start_value), max_label))
+        end_value = max(start_value, min(int(end_value), max_label))
+
+        start_blocked = self.include_parcels_start_spin.blockSignals(True)
+        end_blocked = self.include_parcels_end_spin.blockSignals(True)
+        self.include_parcels_start_spin.setRange(0, max_label)
+        self.include_parcels_end_spin.setRange(0, max_label)
+        self.include_parcels_start_spin.setValue(start_value)
+        self.include_parcels_end_spin.setValue(end_value)
+        self.include_parcels_start_spin.setMaximum(end_value)
+        self.include_parcels_end_spin.setMinimum(start_value)
+        self.include_parcels_start_spin.blockSignals(start_blocked)
+        self.include_parcels_end_spin.blockSignals(end_blocked)
+
+    def _refresh_include_parcel_defaults(self, force=False):
+        if self._selected_paths:
+            self._include_parcel_label_max = _max_parcel_label_from_npz(self._selected_paths[0])
+        else:
+            self._include_parcel_label_max = 0
+        if force:
+            self._set_include_parcel_spin_bounds(
+                start_value=1,
+                end_value=self._include_parcel_label_max,
             )
         else:
-            self.parcellation_label.setText("Parcellation image (optional)")
-            self.parcellation_path_edit.setPlaceholderText(
-                "Optional NIfTI parcellation image (.nii or .nii.gz)"
-            )
+            self._set_include_parcel_spin_bounds()
+
+    def _sync_include_parcel_controls(self):
+        enabled = bool(self.include_parcels_check.isChecked())
+        for widget in (
+            self.include_parcels_start_label,
+            self.include_parcels_start_spin,
+            self.include_parcels_end_label,
+            self.include_parcels_end_spin,
+        ):
+            widget.setEnabled(enabled)
+
+    def _on_include_parcel_start_changed(self, value):
+        self._set_include_parcel_spin_bounds(start_value=value)
+
+    def _on_include_parcel_end_changed(self, value):
+        self._set_include_parcel_spin_bounds(end_value=value)
 
     def _browse_qmask_file(self):
         start_dir = str(self._selected_paths[0].parent) if self._selected_paths else (
@@ -1721,6 +1857,8 @@ class StackPrepareDialog(QWidget):
         self.process_button.setEnabled(can_process)
         if validation_error and not self._process_running():
             self._set_status(validation_error)
+        elif not parcellation_ok and not self._process_running():
+            self._set_status("Select a valid parcellation image before processing.")
         elif (
             not validation_error
             and self._last_external_validation_error
@@ -1742,9 +1880,16 @@ class StackPrepareDialog(QWidget):
         self.status_label.setText(str(text))
 
     def _process_running(self):
-        return bool(self._processing) or (
-            self._worker_thread is not None and self._worker_thread.isRunning()
-        )
+        if bool(self._processing):
+            return True
+        thread = self._worker_thread
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except Exception as exc:
+            _stack_diagnostic_log(f"_process_running thread check failed: {exc}")
+            return False
 
     def _append_log(self, text):
         cleaned = ANSI_ESCAPE_RE.sub("", str(text or ""))
@@ -1803,6 +1948,9 @@ class StackPrepareDialog(QWidget):
             "qmask_path": self.qmask_path_edit.text().strip() or None,
             "mrsi_cov": float(self.mrsi_cov_spin.value()),
             "comp_gradients": bool(self.compute_gradients_check.isChecked()),
+            "include_parcels": bool(self.include_parcels_check.isChecked()),
+            "include_parcels_start": int(self.include_parcels_start_spin.value()),
+            "include_parcels_end": int(self.include_parcels_end_spin.value()),
             "matrix_outpath": str(output_path),
             "parcellation_img_path": self.parcellation_path_edit.text().strip() or None,
             "parcel_labels_retain": [],
@@ -1925,19 +2073,36 @@ class StackPrepareDialog(QWidget):
         self._append_log("Process finished with exit code 1")
 
     def _cleanup_worker_thread(self):
-        _stack_diagnostic_log(
-            f"_cleanup_worker_thread thread_exists={self._worker_thread is not None} running={self._process_running()}"
-        )
         thread = self._worker_thread
+        worker = self._worker
+        running = False
         if thread is not None:
             try:
-                if thread.isRunning():
-                    thread.quit()
-                thread.wait(2000)
-            except Exception:
-                pass
+                running = bool(thread.isRunning())
+            except Exception as exc:
+                _stack_diagnostic_log(f"_cleanup_worker_thread isRunning check failed: {exc}")
+        _stack_diagnostic_log(
+            f"_cleanup_worker_thread thread_exists={thread is not None} running={running}"
+        )
+
+        # Drop references first to avoid re-entrant cleanup touching stale wrappers.
         self._worker = None
         self._worker_thread = None
+
+        if running and thread is not None:
+            try:
+                if hasattr(thread, "requestInterruption"):
+                    thread.requestInterruption()
+            except Exception:
+                pass
+            try:
+                thread.quit()
+            except Exception:
+                pass
+
+        # Worker QObject is already wired to deleteLater on thread finish.
+        # Avoid invoking deleteLater here on possibly stale wrappers.
+        _stack_diagnostic_log("_cleanup_worker_thread complete")
 
     def _on_worker_finished(self):
         self._processing = False
@@ -1980,6 +2145,7 @@ class StackPrepareDialog(QWidget):
                 "QHeaderView::section { background: #2d3646; color: #e5e7eb; border: 1px solid #556070; } "
                 "QTableWidget::item:selected { background: #3b82f6; color: #ffffff; }"
             )
+            style += _switch_checkbox_style("#485569", "#22c55e", "#556070")
         elif theme == "Teya":
             style = (
                 "QWidget { background: #ffd0e5; color: #0b7f7a; font-size: 11pt; } "
@@ -1991,6 +2157,7 @@ class StackPrepareDialog(QWidget):
                 "QHeaderView::section { background: #ffc4df; color: #0b7f7a; border: 1px solid #1db8b2; } "
                 "QTableWidget::item:selected { background: #2ecfc9; color: #073f3c; }"
             )
+            style += _switch_checkbox_style("#f6a9cb", "#2ecfc9", "#1db8b2")
         elif theme == "Donald":
             style = (
                 "QWidget { background: #a64b00; color: #ffffff; font-size: 11pt; } "
@@ -2002,6 +2169,7 @@ class StackPrepareDialog(QWidget):
                 "QHeaderView::section { background: #c96a04; color: #ffffff; border: 1px solid #f3a451; } "
                 "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
             )
+            style += _switch_checkbox_style("#d97706", "#2563eb", "#f3a451")
         else:
             style = (
                 "QWidget { background: #f5f7fb; color: #1f2937; font-size: 11pt; } "
@@ -2013,5 +2181,6 @@ class StackPrepareDialog(QWidget):
                 "QHeaderView::section { background: #eef2f7; color: #1f2937; border: 1px solid #c9d0da; } "
                 "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
             )
+            style += _switch_checkbox_style("#d1d5db", "#2563eb", "#c9d0da")
         self.setStyleSheet(style)
         self._apply_terminal_style()

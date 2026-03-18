@@ -20,7 +20,7 @@ except ImportError:
     pd = None
 
 try:
-    from PyQt6.QtCore import Qt, QSize, qInstallMessageHandler
+    from PyQt6.QtCore import Qt, QSize, QTimer, qInstallMessageHandler
     from PyQt6.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -54,7 +54,7 @@ try:
     from PyQt6.QtGui import QAction, QIcon, QFontMetrics, QPixmap, QColor
     QT_LIB = 6
 except ImportError:
-    from PyQt5.QtCore import Qt, QSize, qInstallMessageHandler
+    from PyQt5.QtCore import Qt, QSize, QTimer, qInstallMessageHandler
     from PyQt5.QtWidgets import (
         QAction,
         QApplication,
@@ -193,6 +193,7 @@ try:
 except ImportError:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.colors import Normalize
 import matplotlib.transforms as mtransforms
 try:
     from matplotlib.widgets import RectangleSelector
@@ -402,6 +403,17 @@ def _align_right_flag():
     return getattr(Qt, "AlignRight", getattr(Qt.AlignmentFlag, "AlignRight"))
 
 
+def _qheader_resize_mode(name: str):
+    resize_mode = getattr(QHeaderView, "ResizeMode", None)
+    if resize_mode is not None and hasattr(resize_mode, name):
+        return getattr(resize_mode, name)
+    return getattr(QHeaderView, name)
+
+
+def _set_header_resize_mode(header, section: int, mode_name: str) -> None:
+    header.setSectionResizeMode(section, _qheader_resize_mode(mode_name))
+
+
 def _load_app_icon() -> QIcon:
     for icon_path in APP_ICON_CANDIDATES:
         if not icon_path.exists():
@@ -536,6 +548,40 @@ def _covars_series(info, name):
     if data is None or data.dtype.names is None:
         return None
     return data[name]
+
+
+def _covars_to_rows(info):
+    if info is None:
+        return [], []
+
+    df = info.get("df")
+    if df is not None:
+        columns = [str(col) for col in df.columns]
+        rows = []
+        for row in df.to_dict(orient="records"):
+            rows.append([_display_text(row.get(col)) for col in columns])
+        return columns, rows
+
+    data = info.get("data")
+    if data is None:
+        return [], []
+    arr = np.asarray(data)
+
+    if getattr(arr.dtype, "names", None):
+        columns = [str(col) for col in arr.dtype.names]
+        rows = []
+        for record in arr:
+            rows.append([_display_text(record[col]) for col in columns])
+        return columns, rows
+
+    if arr.ndim == 2:
+        columns = [f"col_{idx}" for idx in range(arr.shape[1])]
+        rows = []
+        for row in arr:
+            rows.append([_display_text(value) for value in row])
+        return columns, rows
+
+    return [], []
 
 
 def _decode_strings(values):
@@ -737,6 +783,20 @@ def _coerce_label_indices(labels, expected_len: int):
     return out
 
 
+def _flatten_display_vector(values):
+    try:
+        array = np.asarray(values)
+    except Exception:
+        return None
+    if array.ndim == 0:
+        array = array.reshape(1)
+    elif array.ndim == 2 and 1 in array.shape:
+        array = array.reshape(-1)
+    elif array.ndim != 1:
+        return None
+    return [_display_text(value) for value in array.tolist()]
+
+
 class HistogramDialog(QDialog):
     def __init__(self, entries, entry_ids, titles, parent=None) -> None:
         super().__init__(parent)
@@ -823,6 +883,217 @@ class HistogramDialog(QDialog):
             ax.set_xticks([])
             ax.set_yticks([])
         self.canvas.draw_idle()
+
+
+class LabelInfoDialog(QDialog):
+    def __init__(self, source_path: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._source_path = Path(source_path)
+        self._vector_options = self._load_vector_options()
+        self.setWindowTitle(f"Label Info - {self._source_path.name}")
+        self.resize(860, 620)
+        self._build_ui()
+        self._populate_key_selectors()
+        self._update_table()
+
+    def _load_vector_options(self):
+        options = {}
+        try:
+            with np.load(self._source_path, allow_pickle=True) as npz:
+                for key in npz.files:
+                    values = _flatten_display_vector(npz[key])
+                    if values is not None:
+                        options[str(key)] = values
+        except Exception:
+            return {}
+        return options
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        info_label = QLabel(
+            "Inspect parcel label indices and names from the selected NPZ. "
+            "If the standard keys are missing, choose alternative 1D arrays from the dropdowns."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        form.addWidget(QLabel("Label indices key"), 0, 0)
+        self.indices_combo = QComboBox()
+        self.indices_combo.currentIndexChanged.connect(self._update_table)
+        form.addWidget(self.indices_combo, 0, 1)
+
+        form.addWidget(QLabel("Label names key"), 0, 2)
+        self.names_combo = QComboBox()
+        self.names_combo.currentIndexChanged.connect(self._update_table)
+        form.addWidget(self.names_combo, 0, 3)
+
+        layout.addLayout(form)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Row", "Label Index", "Label Name"])
+        self.table.setAlternatingRowColors(True)
+        if QT_LIB == 6:
+            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        else:
+            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        if header is not None:
+            header.setStretchLastSection(True)
+            _set_header_resize_mode(header, 0, "ResizeToContents")
+            _set_header_resize_mode(header, 1, "ResizeToContents")
+            _set_header_resize_mode(header, 2, "Stretch")
+        layout.addWidget(self.table, 1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
+
+    def _preferred_key(self, choices, preferred_keys):
+        for key in preferred_keys:
+            if key in choices:
+                return key
+        return ""
+
+    def _populate_key_selectors(self) -> None:
+        options = [""] + sorted(self._vector_options.keys())
+        self.indices_combo.blockSignals(True)
+        self.names_combo.blockSignals(True)
+        self.indices_combo.clear()
+        self.names_combo.clear()
+        self.indices_combo.addItem("(None)", "")
+        self.names_combo.addItem("(None)", "")
+        for key in sorted(self._vector_options.keys()):
+            self.indices_combo.addItem(key, key)
+            self.names_combo.addItem(key, key)
+
+        preferred_indices = self._preferred_key(options, PARCEL_LABEL_KEYS)
+        preferred_names = self._preferred_key(options, PARCEL_NAME_KEYS)
+        if preferred_indices:
+            self.indices_combo.setCurrentText(preferred_indices)
+        elif self.indices_combo.count() > 1:
+            self.indices_combo.setCurrentIndex(1)
+        if preferred_names:
+            self.names_combo.setCurrentText(preferred_names)
+        elif self.names_combo.count() > 1:
+            fallback_index = 2 if self.names_combo.count() > 2 else 1
+            self.names_combo.setCurrentIndex(fallback_index)
+        self.indices_combo.blockSignals(False)
+        self.names_combo.blockSignals(False)
+
+    def _selected_vector(self, combo: QComboBox):
+        key = combo.currentData()
+        if not key:
+            return None
+        return list(self._vector_options.get(str(key), []))
+
+    def _update_table(self) -> None:
+        indices = self._selected_vector(self.indices_combo) or []
+        names = self._selected_vector(self.names_combo) or []
+        row_count = max(len(indices), len(names))
+        self.table.setRowCount(row_count)
+        for row in range(row_count):
+            values = [
+                str(row),
+                indices[row] if row < len(indices) else "",
+                names[row] if row < len(names) else "",
+            ]
+            for col, text in enumerate(values):
+                item = QTableWidgetItem(str(text))
+                item.setFlags(item.flags() & ~_is_editable_flag())
+                self.table.setItem(row, col, item)
+
+        missing = []
+        if self._preferred_key(self._vector_options, PARCEL_LABEL_KEYS) == "":
+            missing.append("parcel label indices")
+        if self._preferred_key(self._vector_options, PARCEL_NAME_KEYS) == "":
+            missing.append("parcel label names")
+        if missing:
+            missing_text = ", ".join(missing)
+            self.status_label.setText(
+                f"Standard keys not found for {missing_text}. Choose alternative arrays from the dropdowns."
+            )
+        else:
+            self.status_label.setText("Loaded standard parcel label keys from the NPZ file.")
+
+
+class ParticipantsInfoDialog(QDialog):
+    def __init__(self, source_path: Path, covars_info, parent=None) -> None:
+        super().__init__(parent)
+        self._source_path = Path(source_path)
+        self._columns, self._rows = _covars_to_rows(covars_info)
+        self.setWindowTitle(f"Participants - {self._source_path.name}")
+        self.resize(1080, 760)
+        self._build_ui()
+        self._populate_table()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        summary = QLabel(
+            f"{self._source_path.name} | rows: {len(self._rows)} | covariates: {len(self._columns)}"
+        )
+        summary.setWordWrap(False)
+        layout.addWidget(summary)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.table = QTableWidget()
+        self.table.setAlternatingRowColors(True)
+        if QT_LIB == 6:
+            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        else:
+            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table, 1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
+
+    def _populate_table(self) -> None:
+        self.table.clear()
+        self.table.setColumnCount(len(self._columns))
+        self.table.setHorizontalHeaderLabels(self._columns)
+        self.table.setRowCount(len(self._rows))
+
+        editable_flag = _is_editable_flag()
+        for row_idx, row_values in enumerate(self._rows):
+            for col_idx, value in enumerate(row_values):
+                item = QTableWidgetItem(_display_text(value))
+                item.setFlags(item.flags() & ~editable_flag)
+                self.table.setItem(row_idx, col_idx, item)
+
+        header = self.table.horizontalHeader()
+        if header is not None and self._columns:
+            for col_idx in range(max(len(self._columns) - 1, 0)):
+                _set_header_resize_mode(header, col_idx, "ResizeToContents")
+            _set_header_resize_mode(header, len(self._columns) - 1, "Stretch")
+
+        if not self._columns:
+            self.status_label.setText("No covariate columns were found in this NPZ file.")
+        else:
+            self.status_label.setText("Loaded participant covariates from NPZ `covars`.")
 
 
 class PreferencesDialog(QDialog):
@@ -1049,6 +1320,137 @@ class PreferencesDialog(QDialog):
         }
 
 
+class ExportGridDialog(QDialog):
+    _FILTERS = "PDF (*.pdf);;SVG (*.svg);;PNG (*.png)"
+
+    def __init__(
+        self,
+        *,
+        default_path: str,
+        default_columns: int,
+        rotate: bool,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._selected_filter = "PDF (*.pdf)"
+        self.setWindowTitle("Export Grid")
+        self.resize(720, 220)
+        self._build_ui(
+            default_path=default_path,
+            default_columns=default_columns,
+            rotate=rotate,
+        )
+
+    def _build_ui(self, *, default_path: str, default_columns: int, rotate: bool) -> None:
+        layout = QVBoxLayout(self)
+
+        info_label = QLabel(
+            "Choose the output file, grid layout, and optional 45 degree rotation for the exported workspace matrices."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        form.addWidget(QLabel("Output path"), 0, 0)
+        self.output_path_edit = QLineEdit(str(default_path or ""))
+        self.output_path_edit.setPlaceholderText("Choose PDF, SVG, or PNG output")
+        form.addWidget(self.output_path_edit, 0, 1, 1, 2)
+        self.output_browse_button = QPushButton("Browse")
+        self.output_browse_button.clicked.connect(self._browse_output_path)
+        form.addWidget(self.output_browse_button, 0, 3)
+
+        form.addWidget(QLabel("Columns"), 1, 0)
+        self.columns_spin = QSpinBox()
+        self.columns_spin.setRange(1, 12)
+        self.columns_spin.setValue(max(1, min(int(default_columns), 12)))
+        form.addWidget(self.columns_spin, 1, 1)
+
+        self.rotate_check = QCheckBox("Rotate 45 deg")
+        self.rotate_check.setObjectName("greenSquareIndicator")
+        self.rotate_check.setChecked(bool(rotate))
+        form.addWidget(self.rotate_check, 1, 2, 1, 2)
+
+        layout.addLayout(form)
+        layout.addStretch(1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(self.cancel_button)
+        self.export_button = QPushButton("Export")
+        self.export_button.clicked.connect(self.accept)
+        button_row.addWidget(self.export_button)
+        layout.addLayout(button_row)
+
+    def _browse_output_path(self) -> None:
+        current = self.output_path_edit.text().strip()
+        if current:
+            start_path = Path(current).expanduser()
+        else:
+            start_path = Path.home() / "connectome_grid.pdf"
+        selected, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Choose export path",
+            str(start_path),
+            self._FILTERS,
+        )
+        if not selected:
+            return
+        self.output_path_edit.setText(str(Path(selected).expanduser()))
+        if selected_filter:
+            self._selected_filter = selected_filter
+
+    def set_theme(self, theme_name: str) -> None:
+        theme = str(theme_name or "Dark").strip().title()
+        if theme == "Dark":
+            unchecked_bg = "#1f2430"
+            unchecked_border = "#94a3b8"
+        elif theme == "Teya":
+            unchecked_bg = "#ffe6f1"
+            unchecked_border = "#0b7f7a"
+        elif theme == "Donald":
+            unchecked_bg = "#c96a04"
+            unchecked_border = "#ffd19e"
+        else:
+            unchecked_bg = "#ffffff"
+            unchecked_border = "#94a3b8"
+        self.rotate_check.setStyleSheet(
+            "QCheckBox#greenSquareIndicator::indicator {"
+            "width: 16px;"
+            "height: 16px;"
+            "border-radius: 2px;"
+            "}"
+            f"QCheckBox#greenSquareIndicator::indicator:unchecked {{ background: {unchecked_bg}; border: 2px solid {unchecked_border}; }}"
+            "QCheckBox#greenSquareIndicator::indicator:checked { background: #16a34a; border: 2px solid #15803d; }"
+        )
+
+    def accept(self) -> None:
+        output_raw = self.output_path_edit.text().strip()
+        if not output_raw:
+            QMessageBox.warning(self, "Output Path Required", "Choose an export path before continuing.")
+            return
+        try:
+            output_path = Path(output_raw).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self.output_path_edit.setText(str(output_path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid Output Path", f"Failed to prepare output folder:\n{exc}")
+            return
+        super().accept()
+
+    def values(self):
+        return {
+            "output_path": self.output_path_edit.text().strip(),
+            "columns": int(self.columns_spin.value()),
+            "rotate": bool(self.rotate_check.isChecked()),
+            "selected_filter": self._selected_filter,
+        }
+
+
 class BatchMatrixImportDialog(QDialog):
     _MODALITY_OPTIONS = (
         ("All", ""),
@@ -1073,6 +1475,7 @@ class BatchMatrixImportDialog(QDialog):
         self._multimodal_table_refreshing = False
         self._multimodal_duplicate_entries = []
         self._workflow_log_expanded = False
+        self._optional_steps_refresh_pending = False
         self.setWindowTitle("Add Batch")
         self.resize(1200, 800)
         self._build_ui()
@@ -1463,11 +1866,9 @@ class BatchMatrixImportDialog(QDialog):
                 "Wait for the stack process to finish before closing this window.",
             )
             return
-        self._teardown_embedded_workflow_widgets()
         super().reject()
 
     def accept(self) -> None:
-        self._teardown_embedded_workflow_widgets()
         super().accept()
 
     def _append_workflow_terminal(self, text) -> None:
@@ -1506,7 +1907,17 @@ class BatchMatrixImportDialog(QDialog):
             button.setChecked(is_current)
             prefix = "▶ " if is_current else ""
             button.setText(f"{prefix}{idx + 1}. {self._STEP_TITLES[idx]}")
+        if step == 4:
+            self._refresh_run_table()
         self._sync_workflow_process_button()
+
+    def _run_preview_visible(self) -> bool:
+        if not hasattr(self, "step_stack") or self.step_stack is None:
+            return False
+        try:
+            return int(self.step_stack.currentIndex()) == 4
+        except Exception:
+            return False
 
     def _group_from_path(self, path: Path) -> str:
         parts = list(Path(path).parts)
@@ -1528,11 +1939,12 @@ class BatchMatrixImportDialog(QDialog):
         _group, sub, ses = self._path_subject_session(path)
         return sub, ses
 
-    def _covar_row_subject_session(self, covar_row, default_group: str):
-        covars_df = self._filtered_covars_df()
-        if covars_df is None:
-            return default_group, "", ""
-        col_map = {str(col).lower(): col for col in covars_df.columns}
+    def _covar_row_subject_session(self, covar_row, default_group: str, col_map=None):
+        if col_map is None:
+            covars_df = self._filtered_covars_df()
+            if covars_df is None:
+                return default_group, "", ""
+            col_map = {str(col).lower(): col for col in covars_df.columns}
         group_col = col_map.get("group")
         sub_col = (
             col_map.get("participant_id")
@@ -1542,9 +1954,9 @@ class BatchMatrixImportDialog(QDialog):
             or col_map.get("id")
         )
         ses_col = col_map.get("session_id") or col_map.get("session") or col_map.get("ses")
-        participant_value = covar_row[sub_col] if sub_col is not None else ""
-        session_value = covar_row[ses_col] if ses_col is not None else ""
-        covar_group = str(covar_row[group_col]).strip() if group_col is not None else ""
+        participant_value = covar_row.get(sub_col, "") if sub_col is not None else ""
+        session_value = covar_row.get(ses_col, "") if ses_col is not None else ""
+        covar_group = str(covar_row.get(group_col, "")).strip() if group_col is not None else ""
         parsed_group, parsed_sub = _parse_participant_id(str(participant_value))
         group = covar_group or parsed_group or default_group
         sub = _normalize_subject_token(str(parsed_sub or participant_value).strip())
@@ -1558,9 +1970,10 @@ class BatchMatrixImportDialog(QDialog):
         if len(covars_df) == 0:
             return set()
         default_group = self._group_from_path(Path(self.selected_paths()[0])) if self.selected_paths() else ""
+        col_map = {str(col).lower(): col for col in covars_df.columns}
         keys = set()
         for _, covar_row in covars_df.iterrows():
-            _group, sub, ses = self._covar_row_subject_session(covar_row, default_group)
+            _group, sub, ses = self._covar_row_subject_session(covar_row, default_group, col_map=col_map)
             keys.add((sub, ses))
         return keys
 
@@ -1741,7 +2154,7 @@ class BatchMatrixImportDialog(QDialog):
             extra_columns = [col for col in covar_columns if col not in hidden_cols and col is not None]
             default_group = self._group_from_path(selected_paths[0]) if selected_paths else ""
             for _, covar_row in covars_df.iterrows():
-                group, sub, ses = self._covar_row_subject_session(covar_row, default_group)
+                group, sub, ses = self._covar_row_subject_session(covar_row, default_group, col_map=col_map)
                 key = (sub, ses)
                 matched_paths = self._paths_for_subject_session(selected_paths, sub, ses)
                 if not matched_paths and not include_empty_covar_rows:
@@ -1941,7 +2354,8 @@ class BatchMatrixImportDialog(QDialog):
         self._refresh_multimodal_table()
         if self._stack_prepare_widget is not None and hasattr(self._stack_prepare_widget, "refresh_process_state"):
             self._stack_prepare_widget.refresh_process_state()
-        self._refresh_run_table()
+        if self._run_preview_visible():
+            self._refresh_run_table()
 
     def _refresh_optional_steps(self):
         modalities = self._selected_modalities()
@@ -1956,8 +2370,24 @@ class BatchMatrixImportDialog(QDialog):
         for idx in (1, 2, 3, 4):
             self._step_buttons[idx].setEnabled(ready)
         self._update_multimodal_controls()
-        self._refresh_run_table()
+        if self._run_preview_visible():
+            self._refresh_run_table()
         self._sync_workflow_process_button()
+
+    def _schedule_refresh_optional_steps(self):
+        if self._optional_steps_refresh_pending:
+            return
+        self._optional_steps_refresh_pending = True
+
+        def _run_refresh():
+            self._optional_steps_refresh_pending = False
+            self._refresh_optional_steps()
+
+        try:
+            QTimer.singleShot(0, _run_refresh)
+        except Exception:
+            self._optional_steps_refresh_pending = False
+            self._refresh_optional_steps()
 
     def _refresh_multimodal_table(self):
         self._multimodal_table_refreshing = True
@@ -2014,7 +2444,8 @@ class BatchMatrixImportDialog(QDialog):
         else:
             self._multimodal_excluded_pairs.discard(tuple(pair_key))
         self._refresh_multimodal_table()
-        self._refresh_run_table()
+        if self._run_preview_visible():
+            self._refresh_run_table()
         if self._stack_prepare_widget is not None and hasattr(self._stack_prepare_widget, "refresh_process_state"):
             self._stack_prepare_widget.refresh_process_state()
 
@@ -2176,7 +2607,7 @@ class BatchMatrixImportDialog(QDialog):
                 )
             except Exception:
                 pass
-            self._selection_widget.configuration_changed.connect(self._refresh_optional_steps)
+            self._selection_widget.configuration_changed.connect(self._schedule_refresh_optional_steps)
             self.selection_tab_layout.removeWidget(self.selection_placeholder)
             self.selection_placeholder.hide()
             self.selection_tab_layout.addWidget(self._selection_widget, 1)
@@ -2213,7 +2644,7 @@ class BatchMatrixImportDialog(QDialog):
             except Exception:
                 pass
             if hasattr(self._stack_prepare_widget, "configuration_changed"):
-                self._stack_prepare_widget.configuration_changed.connect(self._refresh_optional_steps)
+                self._stack_prepare_widget.configuration_changed.connect(self._schedule_refresh_optional_steps)
             if hasattr(self._stack_prepare_widget, "process_state_changed"):
                 self._stack_prepare_widget.process_state_changed.connect(self._sync_workflow_process_button)
             if hasattr(self._stack_prepare_widget, "log_message_emitted"):
@@ -2256,19 +2687,49 @@ class ConnectomeViewer(QMainWindow):
         self._active_parcellation_path = None
         self._active_parcellation_img = None
         self._active_parcellation_data = None
+        self._gradients_busy = False
+        self._gradients_progress_state = {"minimum": 0, "maximum": 1, "value": 0, "text": "Idle"}
         self._surface_dialog = None
+        self._gradient_scatter_dialog = None
+        self._gradient_classification_dialog = None
+        self._gradients_dialog = None
         self._nbs_dialog = None
         self._selector_dialog = None
         self._harmonize_dialog = None
         self._batch_import_dialog = None
         self._stack_prepare_dialog = None
+        self._label_info_dialog = None
+        self._participants_info_dialog = None
         self._left_panel_saved_width = 320
         self._right_panel_saved_width = 240
         self._plot_title_full = ""
         self._plot_title_tooltip = ""
+        self._export_grid_columns = 4
+        self._export_grid_rotate = False
+        self._export_grid_output_path = ""
+        self._export_grid_selected_filter = "PDF (*.pdf)"
         self._theme_name = self._preferences["theme"]
         self._default_matrix_colormap = self._preferences["matrix_colormap"]
         self._default_gradient_colormap = self._preferences["gradient_colormap"]
+        self._gradient_colormap_name = self._default_gradient_colormap
+        self._gradient_selected_entry_id = None
+        self._gradient_component_count = 4
+        self._gradient_hemisphere_mode = "both"
+        self._gradient_surface_mesh = "fsaverage4"
+        self._gradient_classification_surface_mesh = self._gradient_surface_mesh
+        self._gradient_classification_hemisphere_mode = "both"
+        self._gradient_scatter_rotation = "Default"
+        self._gradient_scatter_triangular_rgb = False
+        self._gradient_classification_fit_mode = "triangle"
+        self._gradient_triangular_color_order = "RBG"
+        self._gradient_classification_colormap_name = self._default_gradient_colormap
+        self._gradient_classification_component = "1"
+        self._gradient_classification_x_axis = "gradient2"
+        self._gradient_classification_y_axis = "gradient1"
+        self._gradient_classification_adjacency_path = ""
+        self._gradient_classification_adjacency_cache = None
+        self._gradient_network_component = "all"
+        self._gradient_component_rotations = ["Default"] * 10
         self._matlab_cmd_default = self._preferences["matlab_cmd"]
         self._matlab_nbs_path_default = self._preferences["matlab_nbs_path"]
         self._results_dir_default = self._preferences["results_dir"]
@@ -2276,6 +2737,8 @@ class ConnectomeViewer(QMainWindow):
         self._atlas_dir_default = self._preferences["atlas_dir"]
         self._zoom_level = int(self._preferences.get("zoom_level", 0))
         self._base_app_font_point_size = None
+        self._hover_vline = None
+        self._hover_hline = None
         app = QApplication.instance()
         if app is not None:
             app_font = app.font()
@@ -2510,8 +2973,8 @@ class ConnectomeViewer(QMainWindow):
         view_menu.addAction(zoom_reset_action)
 
         analysis_menu = bar.addMenu("Analysis")
-        self.compute_gradients_action = QAction("Compute Gradients", self)
-        self.compute_gradients_action.triggered.connect(self._compute_gradients)
+        self.compute_gradients_action = QAction("Gradients", self)
+        self.compute_gradients_action.triggered.connect(self._open_gradients_dialog)
         analysis_menu.addAction(self.compute_gradients_action)
 
         self.nbs_prepare_action = QAction("NBS Prepare", self)
@@ -2528,6 +2991,7 @@ class ConnectomeViewer(QMainWindow):
         settings_menu.addAction(preferences_action)
 
         self._update_nbs_prepare_button()
+        self._update_gradients_button()
 
     def _apply_zoom_level(self, zoom_level: int, show_status: bool = False) -> None:
         try:
@@ -2583,6 +3047,7 @@ class ConnectomeViewer(QMainWindow):
         self._theme_name = prefs["theme"]
         self._default_matrix_colormap = prefs["matrix_colormap"]
         self._default_gradient_colormap = prefs["gradient_colormap"]
+        self._gradient_colormap_name = self._default_gradient_colormap
         self._matlab_cmd_default = prefs["matlab_cmd"]
         self._matlab_nbs_path_default = prefs["matlab_nbs_path"]
         self._results_dir_default = prefs["results_dir"]
@@ -2601,8 +3066,7 @@ class ConnectomeViewer(QMainWindow):
         self._reload_colormaps()
         if hasattr(self, "cmap_combo") and self.cmap_combo.findText(self._default_matrix_colormap) >= 0:
             self.cmap_combo.setCurrentText(self._default_matrix_colormap)
-        if hasattr(self, "gradients_cmap_combo") and self.gradients_cmap_combo.findText(self._default_gradient_colormap) >= 0:
-            self.gradients_cmap_combo.setCurrentText(self._default_gradient_colormap)
+        self._sync_gradients_dialog_state()
 
         if self._save_preferences():
             self.statusBar().showMessage(f"Preferences saved to {CONFIG_PATH}.")
@@ -2644,17 +3108,6 @@ class ConnectomeViewer(QMainWindow):
         self.write_matrix_button.clicked.connect(self._write_selected_matrix_to_file)
         self.write_matrix_button.setEnabled(False)
         export_layout.addWidget(self.write_matrix_button)
-
-        export_cols_label = QLabel("Export columns:")
-        export_layout.addWidget(export_cols_label)
-
-        self.export_cols_spin = QSpinBox()
-        self.export_cols_spin.setRange(1, 12)
-        self.export_cols_spin.setValue(4)
-        export_layout.addWidget(self.export_cols_spin)
-
-        self.export_rotate_check = QCheckBox("Rotate 45 deg CW")
-        export_layout.addWidget(self.export_rotate_check)
 
         selector_group = QGroupBox("Selector")
         selector_layout = QVBoxLayout(selector_group)
@@ -2703,7 +3156,7 @@ class ConnectomeViewer(QMainWindow):
         selector_layout.addWidget(self.selector_prepare_button)
 
         self.cmap_combo = QComboBox()
-        self.cmap_combo.currentIndexChanged.connect(self._plot_selected)
+        self.cmap_combo.currentIndexChanged.connect(self._on_colormap_changed)
 
         list_group = QGroupBox("Matrices")
         list_layout = QVBoxLayout(list_group)
@@ -2714,10 +3167,6 @@ class ConnectomeViewer(QMainWindow):
         self.add_batch_button = QPushButton("Add Batch")
         self.add_batch_button.clicked.connect(self._open_batch_folder)
         list_layout.addWidget(self.add_batch_button)
-
-        self.remove_button = QPushButton("Remove Selected")
-        self.remove_button.clicked.connect(self._remove_selected)
-        list_layout.addWidget(self.remove_button)
 
         self.clear_button = QPushButton("Clear List")
         self.clear_button.clicked.connect(self._clear_files)
@@ -2751,60 +3200,32 @@ class ConnectomeViewer(QMainWindow):
         self.move_down_button = QPushButton("Move Down")
         self.move_down_button.clicked.connect(lambda: self._move_selected(1))
         move_layout.addWidget(self.move_down_button)
+        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button.clicked.connect(self._remove_selected)
+        move_layout.addWidget(self.remove_button)
         list_layout.addLayout(move_layout)
 
         hint = QLabel("Drag & drop .npz files here.")
         hint.setWordWrap(True)
         list_layout.addWidget(hint)
 
+        info_group = QGroupBox("Info")
+        info_layout = QVBoxLayout(info_group)
+        self.view_labels_button = QPushButton("View Labels")
+        self.view_labels_button.clicked.connect(self._open_label_info_dialog)
+        self.view_labels_button.setEnabled(False)
+        info_layout.addWidget(self.view_labels_button)
+        self.view_participants_button = QPushButton("View Participants")
+        self.view_participants_button.clicked.connect(self._open_participants_info_dialog)
+        self.view_participants_button.setEnabled(False)
+        info_layout.addWidget(self.view_participants_button)
+
         gradients_group = QGroupBox("Gradients")
         gradients_layout = QVBoxLayout(gradients_group)
-        gradients_row = QHBoxLayout()
-        self.gradients_compute_button = QPushButton("Compute")
-        self.gradients_compute_button.clicked.connect(self._compute_gradients)
-        gradients_row.addWidget(self.gradients_compute_button)
-        gradients_layout.addLayout(gradients_row)
-
-        gradients_label = QLabel("N components:")
-        gradients_layout.addWidget(gradients_label)
-
-        gradients_spin_row = QHBoxLayout()
-        self.gradients_spin = QSpinBox()
-        self.gradients_spin.setRange(1, 10)
-        self.gradients_spin.setValue(4)
-        gradients_spin_row.addWidget(self.gradients_spin)
-        gradients_layout.addLayout(gradients_spin_row)
-
-        self.select_parcellation_button = QPushButton("Set Parcellation")
-        self.select_parcellation_button.clicked.connect(self._select_parcellation_template)
-        gradients_layout.addWidget(self.select_parcellation_button)
-
-        self.parcellation_label = QLabel("Parcellation: none")
-        self.parcellation_label.setWordWrap(True)
-        gradients_layout.addWidget(self.parcellation_label)
-
-        gradients_cmap_label = QLabel("3D colorbar:")
-        gradients_layout.addWidget(gradients_cmap_label)
-        self.gradients_cmap_combo = QComboBox()
-        gradients_layout.addWidget(self.gradients_cmap_combo)
-        self._reload_colormaps()
-
-        self.gradients_progress = QProgressBar()
-        self.gradients_progress.setRange(0, 1)
-        self.gradients_progress.setValue(0)
-        self.gradients_progress.setFormat("Idle")
-        gradients_layout.addWidget(self.gradients_progress)
-
-        gradients_actions_row = QHBoxLayout()
-        self.gradients_save_button = QPushButton("Save")
-        self.gradients_save_button.clicked.connect(self._save_gradients_projection)
-        self.gradients_save_button.setEnabled(False)
-        gradients_actions_row.addWidget(self.gradients_save_button)
-        self.gradients_render_button = QPushButton("Render 3D")
-        self.gradients_render_button.clicked.connect(self._render_gradients_3d)
-        self.gradients_render_button.setEnabled(False)
-        gradients_actions_row.addWidget(self.gradients_render_button)
-        gradients_layout.addLayout(gradients_actions_row)
+        self.gradients_open_button = QPushButton("Gradients")
+        self.gradients_open_button.clicked.connect(self._open_gradients_dialog)
+        self.gradients_open_button.setEnabled(False)
+        gradients_layout.addWidget(self.gradients_open_button)
 
         nbs_group = QGroupBox("NBS")
         nbs_layout = QVBoxLayout(nbs_group)
@@ -2820,9 +3241,12 @@ class ConnectomeViewer(QMainWindow):
         self.harmonize_prepare_button.setEnabled(False)
         harmonize_layout.addWidget(self.harmonize_prepare_button)
 
+        self._reload_colormaps()
+
         self._styled_groups = [
             list_group,
             selector_group,
+            info_group,
             export_group,
             gradients_group,
             nbs_group,
@@ -2831,6 +3255,7 @@ class ConnectomeViewer(QMainWindow):
 
         controls_layout.addWidget(list_group)
         controls_layout.addWidget(selector_group)
+        controls_layout.addWidget(info_group)
         controls_layout.addWidget(export_group)
 
         controls_layout.addStretch(1)
@@ -3144,6 +3569,11 @@ class ConnectomeViewer(QMainWindow):
                 self._selector_dialog.set_theme(theme)
             except Exception:
                 pass
+        if getattr(self, "_gradients_dialog", None) is not None and hasattr(self._gradients_dialog, "set_theme"):
+            try:
+                self._gradients_dialog.set_theme(theme)
+            except Exception:
+                pass
         if getattr(self, "_harmonize_dialog", None) is not None and hasattr(self._harmonize_dialog, "set_theme"):
             try:
                 self._harmonize_dialog.set_theme(theme)
@@ -3166,6 +3596,30 @@ class ConnectomeViewer(QMainWindow):
         ):
             try:
                 self._surface_dialog.set_theme(theme)
+            except Exception:
+                pass
+        if getattr(self, "_gradient_scatter_dialog", None) is not None and hasattr(
+            self._gradient_scatter_dialog, "set_theme"
+        ):
+            try:
+                self._gradient_scatter_dialog.set_theme(theme)
+            except Exception:
+                pass
+        if getattr(self, "_gradient_classification_dialog", None) is not None and hasattr(
+            self._gradient_classification_dialog, "set_theme"
+        ):
+            try:
+                self._gradient_classification_dialog.set_theme(theme)
+            except Exception:
+                pass
+        if getattr(self, "_label_info_dialog", None) is not None:
+            try:
+                self._label_info_dialog.setStyleSheet(self.styleSheet())
+            except Exception:
+                pass
+        if getattr(self, "_participants_info_dialog", None) is not None:
+            try:
+                self._participants_info_dialog.setStyleSheet(self.styleSheet())
             except Exception:
                 pass
 
@@ -3236,16 +3690,15 @@ class ConnectomeViewer(QMainWindow):
             (getattr(self, "remove_button", None), "trash.svg"),
             (getattr(self, "clear_button", None), "broom_clear.svg"),
             (getattr(self, "hist_button", None), "histogram.svg"),
+            (getattr(self, "view_labels_button", None), "info.svg"),
+            (getattr(self, "view_participants_button", None), "info.svg"),
             (getattr(self, "export_button", None), "export_grid.svg"),
             (getattr(self, "write_matrix_button", None), "save_disk.svg"),
             (getattr(self, "move_up_button", None), "arrow_up.svg"),
             (getattr(self, "move_down_button", None), "arrow_down.svg"),
-            (getattr(self, "gradients_compute_button", None), "play_circle_compute.svg"),
-            (getattr(self, "gradients_save_button", None), "save_disk.svg"),
-            (getattr(self, "gradients_render_button", None), "cube_3d.svg"),
+            (getattr(self, "gradients_open_button", None), "cube_3d.svg"),
             (getattr(self, "nbs_prepare_button", None), "wrench_prepare.svg"),
             (getattr(self, "harmonize_prepare_button", None), "wrench_prepare.svg"),
-            (getattr(self, "select_parcellation_button", None), "settings_sliders.svg"),
             (getattr(self, "selector_prepare_button", None), "filter_threshold.svg"),
             (getattr(self, "sample_add_button", None), "folder_plus.svg"),
         ]
@@ -3327,11 +3780,79 @@ class ConnectomeViewer(QMainWindow):
             return DEFAULT_PARCELLATION_DIR
         return ROOTDIR
 
+    def _update_view_labels_button(self) -> None:
+        if not hasattr(self, "view_labels_button"):
+            return
+        source_path = self._current_source_path()
+        self.view_labels_button.setEnabled(source_path is not None and source_path.exists())
+        self._update_view_participants_button()
+
+    def _update_view_participants_button(self) -> None:
+        if not hasattr(self, "view_participants_button"):
+            return
+        source_path = self._current_source_path()
+        enabled = False
+        if source_path is not None and source_path.exists():
+            info = self._covars_cache.get(source_path)
+            if info is None:
+                info = _load_covars_info(source_path)
+                self._covars_cache[source_path] = info
+            enabled = bool(_covars_columns(info))
+        self.view_participants_button.setEnabled(enabled)
+
+    def _open_label_info_dialog(self) -> None:
+        source_path = self._current_source_path()
+        if source_path is None or not source_path.exists():
+            self.statusBar().showMessage("Select a matrix backed by an NPZ file to inspect labels.")
+            return
+        try:
+            dialog = LabelInfoDialog(source_path, parent=self)
+            dialog.setStyleSheet(self.styleSheet())
+            dialog.finished.connect(lambda *_args: setattr(self, "_label_info_dialog", None))
+            self._label_info_dialog = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            self.statusBar().showMessage(f"Opened label info for {source_path.name}.")
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to open label info: {exc}")
+
+    def _open_participants_info_dialog(self) -> None:
+        source_path = self._current_source_path()
+        if source_path is None or not source_path.exists():
+            self.statusBar().showMessage("Select a matrix backed by an NPZ file to inspect participants.")
+            return
+        covars_info = self._covars_cache.get(source_path)
+        if covars_info is None:
+            covars_info = _load_covars_info(source_path)
+            self._covars_cache[source_path] = covars_info
+        if covars_info is None:
+            self.statusBar().showMessage("Covars not found in selected file.")
+            return
+        columns, rows = _covars_to_rows(covars_info)
+        if not columns:
+            self.statusBar().showMessage("Selected file has no tabular covars to display.")
+            return
+        try:
+            dialog = ParticipantsInfoDialog(source_path, covars_info, parent=self)
+            dialog.setStyleSheet(self.styleSheet())
+            dialog.finished.connect(lambda *_args: setattr(self, "_participants_info_dialog", None))
+            self._participants_info_dialog = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            self.statusBar().showMessage(
+                f"Opened participants view for {source_path.name} ({len(rows)} rows)."
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to open participants view: {exc}")
+
     def _update_parcellation_label(self) -> None:
-        if self._active_parcellation_path is None:
-            self.parcellation_label.setText("Parcellation: none")
-        else:
-            self.parcellation_label.setText(f"Parcellation: {self._active_parcellation_path.name}")
+        if getattr(self, "_gradients_dialog", None) is not None:
+            try:
+                self._gradients_dialog.set_parcellation_path(self._active_parcellation_path)
+            except Exception:
+                pass
 
     def _select_parcellation_template(self) -> bool:
         template_path, _ = QFileDialog.getOpenFileName(
@@ -3363,18 +3884,965 @@ class ConnectomeViewer(QMainWindow):
         self._active_parcellation_img = template_img
         self._active_parcellation_data = template_data
         self._update_parcellation_label()
+        self._reset_gradients_output()
         return True
 
     def _reset_gradients_output(self) -> None:
         self._last_gradients = None
-        if hasattr(self, "gradients_save_button"):
-            self.gradients_save_button.setEnabled(False)
-        if hasattr(self, "gradients_render_button"):
-            self.gradients_render_button.setEnabled(False)
-        if hasattr(self, "gradients_progress"):
-            self.gradients_progress.setRange(0, 1)
-            self.gradients_progress.setValue(0)
-            self.gradients_progress.setFormat("Idle")
+        self._set_gradients_progress(0, 1, 0, "Idle")
+        self._sync_gradients_dialog_state()
+
+    def _set_gradients_progress(self, minimum: int, maximum: int, value: int, text: str) -> None:
+        self._gradients_progress_state = {
+            "minimum": int(minimum),
+            "maximum": int(maximum),
+            "value": int(value),
+            "text": str(text or ""),
+        }
+        if getattr(self, "_gradients_dialog", None) is not None:
+            try:
+                self._gradients_dialog.set_progress(int(minimum), int(maximum), int(value), str(text or ""))
+            except Exception:
+                pass
+
+    def _current_gradient_component_count(self) -> int:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_component_count = int(dialog.component_count())
+            except Exception:
+                pass
+        try:
+            value = int(self._gradient_component_count)
+        except Exception:
+            value = 4
+        return max(1, min(10, value))
+
+    @staticmethod
+    def _normalize_gradient_hemisphere_mode(value: str) -> str:
+        text = str(value or "both").strip().lower()
+        if text not in {"both", "lh", "rh"}:
+            text = "both"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_surface_mesh(value: str) -> str:
+        text = str(value or "fsaverage4").strip().lower()
+        valid = {"fsaverage3", "fsaverage4", "fsaverage5", "fsaverage6", "fsaverage7"}
+        if text not in valid:
+            text = "fsaverage4"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_classification_component(value, max_components=None) -> str:
+        text = str(value or "1").strip().lower()
+        if text.startswith("c"):
+            text = text[1:]
+        try:
+            index = int(text)
+        except Exception:
+            index = 1
+        if index < 1:
+            index = 1
+        if max_components is not None:
+            index = min(index, max(1, int(max_components)))
+        return str(index)
+
+    @staticmethod
+    def _normalize_gradient_classification_axis(value: str, default: str = "gradient1") -> str:
+        fallback = str(default or "gradient1").strip().lower()
+        if fallback not in {"gradient1", "gradient2", "spatial"}:
+            fallback = "gradient1"
+        text = str(value or "").strip().lower()
+        mapping = {
+            "gradient1": "gradient1",
+            "gradient 1": "gradient1",
+            "g1": "gradient1",
+            "c1": "gradient1",
+            "1": "gradient1",
+            "gradient2": "gradient2",
+            "gradient 2": "gradient2",
+            "g2": "gradient2",
+            "c2": "gradient2",
+            "2": "gradient2",
+            "spatial": "spatial",
+            "space": "spatial",
+        }
+        normalized = mapping.get(text, mapping.get(text.replace(" ", ""), fallback))
+        if normalized not in {"gradient1", "gradient2", "spatial"}:
+            normalized = fallback
+        return normalized
+
+    @staticmethod
+    def _normalize_gradient_scatter_rotation(value: str) -> str:
+        text = str(value or "Default").strip()
+        valid = {"Default", "+90", "-90", "180"}
+        if text not in valid:
+            text = "Default"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_triangular_color_order(value: str) -> str:
+        text = str(value or "RBG").strip().upper()
+        valid = {"RGB", "RBG", "GRB", "GBR", "BRG", "BGR"}
+        if text not in valid:
+            text = "RBG"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_classification_fit_mode(value: str) -> str:
+        text = str(value or "triangle").strip().lower()
+        if text not in {"triangle", "square"}:
+            text = "triangle"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_rotation_preset(value: str) -> str:
+        text = str(value or "Default").strip()
+        valid = {"Default", "X +90", "X -90", "Y +90", "Y -90", "Y 180", "Z +90", "Z -90"}
+        if text not in valid:
+            text = "Default"
+        return text
+
+    @staticmethod
+    def _normalize_gradient_network_component(value, max_components=None) -> str:
+        text = str(value or "all").strip().lower()
+        if text in {"", "all"}:
+            return "all"
+        if text.startswith("c"):
+            text = text[1:]
+        try:
+            index = int(text)
+        except Exception:
+            return "all"
+        if index < 1:
+            return "all"
+        if max_components is not None and index > int(max_components):
+            return "all"
+        return str(index)
+
+    def _ensure_gradient_rotation_count(self, count: int) -> None:
+        target = max(1, min(10, int(count)))
+        current = list(self._gradient_component_rotations or [])
+        while len(current) < target:
+            current.append("Default")
+        self._gradient_component_rotations = current[:10]
+
+    def _available_gradient_network_component_count(self) -> int:
+        results = self._last_gradients or {}
+        try:
+            if results:
+                value = int(results.get("n_grad", 0))
+                if value > 0:
+                    return max(1, min(10, value))
+        except Exception:
+            pass
+        return self._current_gradient_component_count()
+
+    def _selected_gradient_hemisphere_mode(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_hemisphere_mode = self._normalize_gradient_hemisphere_mode(
+                    dialog.selected_hemisphere()
+                )
+            except Exception:
+                pass
+        return self._normalize_gradient_hemisphere_mode(self._gradient_hemisphere_mode)
+
+    def _selected_gradient_surface_mesh(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_surface_mesh = self._normalize_gradient_surface_mesh(
+                    dialog.selected_surface_mesh()
+                )
+            except Exception:
+                pass
+        self._gradient_surface_mesh = self._normalize_gradient_surface_mesh(self._gradient_surface_mesh)
+        return self._gradient_surface_mesh
+
+    def _selected_gradient_classification_surface_mesh(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_classification_surface_mesh = self._normalize_gradient_surface_mesh(
+                    dialog.selected_classification_surface_mesh()
+                )
+            except Exception:
+                pass
+        self._gradient_classification_surface_mesh = self._normalize_gradient_surface_mesh(
+            self._gradient_classification_surface_mesh
+        )
+        return self._gradient_classification_surface_mesh
+
+    def _selected_gradient_classification_hemisphere_mode(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_classification_hemisphere_mode = self._normalize_gradient_hemisphere_mode(
+                    dialog.selected_classification_hemisphere()
+                )
+            except Exception:
+                pass
+        self._gradient_classification_hemisphere_mode = self._normalize_gradient_hemisphere_mode(
+            self._gradient_classification_hemisphere_mode
+        )
+        return self._gradient_classification_hemisphere_mode
+
+    def _selected_gradient_scatter_rotation(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_scatter_rotation = self._normalize_gradient_scatter_rotation(
+                    dialog.selected_scatter_rotation()
+                )
+            except Exception:
+                pass
+        self._gradient_scatter_rotation = self._normalize_gradient_scatter_rotation(
+            self._gradient_scatter_rotation
+        )
+        return self._gradient_scatter_rotation
+
+    def _selected_gradient_triangular_rgb(self) -> bool:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_scatter_triangular_rgb = bool(dialog.use_triangular_rgb())
+            except Exception:
+                pass
+        self._gradient_scatter_triangular_rgb = bool(self._gradient_scatter_triangular_rgb)
+        return self._gradient_scatter_triangular_rgb
+
+    def _selected_gradient_classification_fit_mode(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_classification_fit_mode = self._normalize_gradient_classification_fit_mode(
+                    dialog.selected_classification_fit_mode()
+                )
+            except Exception:
+                pass
+        self._gradient_classification_fit_mode = self._normalize_gradient_classification_fit_mode(
+            self._gradient_classification_fit_mode
+        )
+        return self._gradient_classification_fit_mode
+
+    def _selected_gradient_triangular_color_order(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_triangular_color_order = self._normalize_gradient_triangular_color_order(
+                    dialog.selected_triangular_color_order()
+                )
+            except Exception:
+                pass
+        self._gradient_triangular_color_order = self._normalize_gradient_triangular_color_order(
+            self._gradient_triangular_color_order
+        )
+        return self._gradient_triangular_color_order
+
+    def _selected_gradient_classification_colormap(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        names = self._available_colormap_names()
+        if dialog is not None:
+            try:
+                value = str(dialog.selected_classification_colormap() or "").strip()
+                if value:
+                    self._gradient_classification_colormap_name = value
+            except Exception:
+                pass
+        current = str(self._gradient_classification_colormap_name or "").strip()
+        if current not in names:
+            current = self._gradient_colormap_name if self._gradient_colormap_name in names else (names[0] if names else "spectrum_fsl")
+            self._gradient_classification_colormap_name = current
+        return current
+
+    def _selected_gradient_classification_component(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        max_components = self._available_gradient_network_component_count()
+        if dialog is not None:
+            try:
+                self._gradient_classification_component = self._normalize_gradient_classification_component(
+                    dialog.selected_classification_component(),
+                    max_components=max_components,
+                )
+            except Exception:
+                pass
+        self._gradient_classification_component = self._normalize_gradient_classification_component(
+            self._gradient_classification_component,
+            max_components=max_components,
+        )
+        return self._gradient_classification_component
+
+    def _selected_gradient_classification_x_axis(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_classification_x_axis = self._normalize_gradient_classification_axis(
+                    dialog.selected_classification_x_axis(),
+                    default="gradient2",
+                )
+            except Exception:
+                pass
+        self._gradient_classification_x_axis = self._normalize_gradient_classification_axis(
+            self._gradient_classification_x_axis,
+            default="gradient2",
+        )
+        return self._gradient_classification_x_axis
+
+    def _selected_gradient_classification_y_axis(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                self._gradient_classification_y_axis = self._normalize_gradient_classification_axis(
+                    dialog.selected_classification_y_axis(),
+                    default="gradient1",
+                )
+            except Exception:
+                pass
+        self._gradient_classification_y_axis = self._normalize_gradient_classification_axis(
+            self._gradient_classification_y_axis,
+            default="gradient1",
+        )
+        return self._gradient_classification_y_axis
+
+    def _is_gradient_classification_axis_available(self, axis_key: str, results=None) -> bool:
+        current = self._last_gradients if results is None else results
+        if not current:
+            return False
+        axis = self._normalize_gradient_classification_axis(axis_key)
+        try:
+            n_grad = int(current.get("n_grad", 0))
+        except Exception:
+            n_grad = 0
+        if axis == "gradient1":
+            return n_grad >= 1
+        if axis == "gradient2":
+            return n_grad >= 2
+        if axis == "spatial":
+            try:
+                projection_labels = np.asarray(current.get("projection_labels"), dtype=int).reshape(-1)
+            except Exception:
+                projection_labels = np.zeros(0, dtype=int)
+            return projection_labels.size > 0 and (
+                bool(str(current.get("template_path") or "").strip()) or self._active_parcellation_img is not None
+            )
+        return False
+
+    @staticmethod
+    def _gradient_classification_axis_label(axis_key: str, axis_role: str = "x") -> str:
+        axis = ConnectomeViewer._normalize_gradient_classification_axis(axis_key)
+        if axis == "gradient1":
+            return "Gradient 1"
+        if axis == "gradient2":
+            return "Gradient 2"
+        return "Spatial 1" if str(axis_role).strip().lower() == "x" else "Spatial 2"
+
+    @staticmethod
+    def _infer_projection_hemisphere_from_name(name):
+        text = str(name or "").strip().lower()
+        if not text:
+            return None
+        if any(token in text for token in ("brainstem", "brain-stem", "midbrain")):
+            return "midline"
+        tokens = [token for token in re.split(r"[^a-z0-9]+", text) if token]
+        if tokens:
+            first = tokens[0]
+            if first in {"lh", "left", "l"}:
+                return "lh"
+            if first in {"rh", "right", "r"}:
+                return "rh"
+            if "lh" in tokens or "left" in tokens:
+                return "lh"
+            if "rh" in tokens or "right" in tokens:
+                return "rh"
+        if text.startswith(("lh_", "lh-", "left_", "left-", "ctx-lh", "hemi-l")):
+            return "lh"
+        if text.startswith(("rh_", "rh-", "right_", "right-", "ctx-rh", "hemi-r")):
+            return "rh"
+        return None
+
+    def _gradient_projection_hemisphere_codes(self):
+        results = self._last_gradients or {}
+        if not results:
+            raise RuntimeError("No gradients are available.")
+        projection_labels = np.asarray(results.get("projection_labels"), dtype=int).reshape(-1)
+        if projection_labels.size == 0:
+            raise RuntimeError("No projected parcel labels are available.")
+
+        cached = results.get("hemisphere_codes")
+        if isinstance(cached, dict):
+            cached_labels = np.asarray(cached.get("projection_labels"), dtype=int).reshape(-1)
+            cached_codes = np.asarray(cached.get("codes"), dtype=int).reshape(-1)
+            if (
+                cached_labels.shape == projection_labels.shape
+                and np.array_equal(cached_labels, projection_labels)
+                and cached_codes.shape == projection_labels.shape
+            ):
+                return cached_codes
+
+        codes = np.full(projection_labels.shape, -1, dtype=int)
+        parcel_names = _to_string_list(results.get("parcel_names"))
+        if parcel_names and len(parcel_names) == projection_labels.size:
+            for idx, parcel_name in enumerate(parcel_names):
+                hemisphere = self._infer_projection_hemisphere_from_name(parcel_name)
+                if hemisphere == "lh":
+                    codes[idx] = 0
+                elif hemisphere == "rh":
+                    codes[idx] = 1
+                elif hemisphere == "midline":
+                    codes[idx] = 2
+
+        unresolved = codes < 0
+        if np.any(unresolved):
+            template_img, template_data = self._gradient_template_img_and_data()
+            centroid_codes = None
+            try:
+                centroids_world = np.asarray(
+                    nettools.compute_centroids(
+                        template_img,
+                        labels=np.asarray(projection_labels, dtype=int),
+                        world=True,
+                    ),
+                    dtype=float,
+                )
+                if centroids_world.shape[0] == projection_labels.size:
+                    centroid_x = np.asarray(centroids_world[:, 0], dtype=float)
+                    finite_x = centroid_x[np.isfinite(centroid_x)]
+                    if finite_x.size and np.nanmin(finite_x) < 0.0 < np.nanmax(finite_x):
+                        centroid_codes = np.where(centroid_x < 0.0, 0, 1).astype(int, copy=False)
+            except Exception:
+                centroid_codes = None
+
+            if centroid_codes is None:
+                centroids_vox = np.asarray(
+                    nettools.compute_centroids(
+                        template_img,
+                        labels=np.asarray(projection_labels, dtype=int),
+                        world=False,
+                    ),
+                    dtype=float,
+                )
+                if centroids_vox.shape[0] != projection_labels.size:
+                    raise RuntimeError("Parcel centroid count does not match the projected labels.")
+                midline_x = float(np.asarray(template_data, dtype=int).shape[0] * 0.5)
+                centroid_codes = np.where(centroids_vox[:, 0] < midline_x, 0, 1).astype(int, copy=False)
+
+            codes[unresolved] = centroid_codes[unresolved]
+
+        results["hemisphere_codes"] = {
+            "projection_labels": np.asarray(projection_labels, dtype=int),
+            "codes": np.asarray(codes, dtype=int),
+        }
+        return np.asarray(codes, dtype=int)
+
+    def _gradient_projection_hemisphere_mask(self, hemisphere_mode: str, projection_labels=None):
+        mode = self._normalize_gradient_hemisphere_mode(hemisphere_mode)
+        labels = np.asarray(
+            self._last_gradients.get("projection_labels")
+            if projection_labels is None
+            else projection_labels,
+            dtype=int,
+        ).reshape(-1)
+        if labels.size == 0 or mode == "both":
+            return np.ones(labels.shape, dtype=bool)
+        codes = self._gradient_projection_hemisphere_codes()
+        if codes.shape != labels.shape:
+            raise RuntimeError("Hemisphere membership is out of sync with the projected labels.")
+        if mode == "lh":
+            return np.asarray((codes == 0) | (codes == 2), dtype=bool)
+        return np.asarray((codes == 1) | (codes == 2), dtype=bool)
+
+    def _can_classify_gradients(self) -> bool:
+        results = self._last_gradients or {}
+        if not results:
+            return False
+        try:
+            n_grad = int(results.get("n_grad", 0))
+        except Exception:
+            n_grad = 0
+        if n_grad < 1:
+            return False
+        x_axis = self._selected_gradient_classification_x_axis()
+        y_axis = self._selected_gradient_classification_y_axis()
+        return self._is_gradient_classification_axis_available(x_axis, results) and self._is_gradient_classification_axis_available(
+            y_axis,
+            results,
+        )
+
+    def _current_gradient_rotation_presets(self):
+        dialog = getattr(self, "_gradients_dialog", None)
+        count = self._current_gradient_component_count()
+        if dialog is not None:
+            try:
+                presets = [
+                    self._normalize_gradient_rotation_preset(value)
+                    for value in dialog.rotation_presets()[:count]
+                ]
+                while len(presets) < count:
+                    presets.append("Default")
+                for idx, value in enumerate(presets):
+                    if idx < len(self._gradient_component_rotations):
+                        self._gradient_component_rotations[idx] = value
+                    else:
+                        self._gradient_component_rotations.append(value)
+            except Exception:
+                pass
+        self._ensure_gradient_rotation_count(count)
+        return [
+            self._normalize_gradient_rotation_preset(value)
+            for value in self._gradient_component_rotations[:count]
+        ]
+
+    def _selected_gradient_network_component(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        max_components = self._available_gradient_network_component_count()
+        if dialog is not None:
+            try:
+                self._gradient_network_component = self._normalize_gradient_network_component(
+                    dialog.selected_network_component(),
+                    max_components=max_components,
+                )
+            except Exception:
+                pass
+        self._gradient_network_component = self._normalize_gradient_network_component(
+            self._gradient_network_component,
+            max_components=max_components,
+        )
+        return self._gradient_network_component
+
+    def _has_square_current_matrix(self) -> bool:
+        if self._current_matrix is None:
+            return False
+        matrix = np.asarray(self._current_matrix)
+        return matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
+
+    def _update_gradients_button(self) -> None:
+        enabled = bool(self._available_gradient_matrix_entries())
+        if hasattr(self, "gradients_open_button"):
+            self.gradients_open_button.setEnabled(enabled)
+        if hasattr(self, "compute_gradients_action"):
+            self.compute_gradients_action.setEnabled(enabled)
+        self._sync_gradients_dialog_state()
+
+    def _on_gradient_component_changed(self, value: int) -> None:
+        try:
+            self._gradient_component_count = max(1, min(10, int(value)))
+        except Exception:
+            self._gradient_component_count = 4
+        self._ensure_gradient_rotation_count(self._gradient_component_count)
+        self._gradient_network_component = self._normalize_gradient_network_component(
+            self._gradient_network_component,
+            max_components=self._available_gradient_network_component_count(),
+        )
+        self._gradient_classification_component = self._normalize_gradient_classification_component(
+            self._gradient_classification_component,
+            max_components=self._available_gradient_network_component_count(),
+        )
+        self._sync_gradients_dialog_state()
+
+    def _on_gradient_colormap_changed(self, value: str) -> None:
+        text = str(value or "").strip()
+        if text:
+            self._gradient_colormap_name = text
+
+    def _on_gradient_hemisphere_changed(self, value: str) -> None:
+        self._gradient_hemisphere_mode = self._normalize_gradient_hemisphere_mode(value)
+
+    def _on_gradient_surface_mesh_changed(self, value: str) -> None:
+        self._gradient_surface_mesh = self._normalize_gradient_surface_mesh(value)
+
+    def _on_gradient_classification_surface_mesh_changed(self, value: str) -> None:
+        self._gradient_classification_surface_mesh = self._normalize_gradient_surface_mesh(value)
+
+    def _on_gradient_classification_hemisphere_changed(self, value: str) -> None:
+        self._gradient_classification_hemisphere_mode = self._normalize_gradient_hemisphere_mode(value)
+
+    def _on_gradient_scatter_rotation_changed(self, value: str) -> None:
+        self._gradient_scatter_rotation = self._normalize_gradient_scatter_rotation(value)
+
+    def _on_gradient_triangular_rgb_changed(self, enabled: bool) -> None:
+        self._gradient_scatter_triangular_rgb = bool(enabled)
+
+    def _on_gradient_classification_fit_mode_changed(self, value: str) -> None:
+        self._gradient_classification_fit_mode = self._normalize_gradient_classification_fit_mode(value)
+
+    def _on_gradient_triangular_color_order_changed(self, value: str) -> None:
+        self._gradient_triangular_color_order = self._normalize_gradient_triangular_color_order(value)
+
+    def _on_gradient_classification_colormap_changed(self, value: str) -> None:
+        text = str(value or "").strip()
+        if text:
+            self._gradient_classification_colormap_name = text
+
+    def _on_gradient_classification_component_changed(self, value: str) -> None:
+        self._gradient_classification_component = self._normalize_gradient_classification_component(
+            value,
+            max_components=self._available_gradient_network_component_count(),
+        )
+
+    def _on_gradient_classification_x_axis_changed(self, value: str) -> None:
+        self._gradient_classification_x_axis = self._normalize_gradient_classification_axis(
+            value,
+            default="gradient2",
+        )
+        self._sync_gradients_dialog_state()
+
+    def _on_gradient_classification_y_axis_changed(self, value: str) -> None:
+        self._gradient_classification_y_axis = self._normalize_gradient_classification_axis(
+            value,
+            default="gradient1",
+        )
+        self._sync_gradients_dialog_state()
+
+    @staticmethod
+    def _load_gradient_classification_adjacency_npz(path: Path):
+        with np.load(path, allow_pickle=True) as npz:
+            if "adjacency_mat" not in npz:
+                raise KeyError("Key 'adjacency_mat' was not found in the selected NPZ.")
+            adjacency = np.asarray(npz["adjacency_mat"], dtype=float)
+            parcel_labels = None
+            for key in ("parcel_labels", "parcel_labels_group", "parcel_labels_group.npy"):
+                if key in npz:
+                    parcel_labels = npz[key]
+                    break
+        if adjacency.ndim != 2 or adjacency.shape[0] != adjacency.shape[1]:
+            raise ValueError("adjacency_mat must be a square 2D matrix.")
+        label_indices = _coerce_label_indices(parcel_labels, adjacency.shape[0])
+        if label_indices is None:
+            raise ValueError(
+                "parcel_labels is missing, invalid, or does not match adjacency_mat size."
+            )
+        labels_array = np.asarray(label_indices, dtype=int)
+        if np.unique(labels_array).size != labels_array.size:
+            raise ValueError("parcel_labels in the adjacency NPZ must be unique.")
+        return {
+            "path": str(path),
+            "adjacency": adjacency,
+            "parcel_labels": labels_array,
+        }
+
+    def _gradient_classification_adjacency_data(self):
+        path_text = str(self._gradient_classification_adjacency_path or "").strip()
+        if not path_text:
+            return None
+        cached = self._gradient_classification_adjacency_cache
+        if isinstance(cached, dict) and str(cached.get("path") or "") == path_text:
+            return cached
+        path = Path(path_text)
+        if not path.exists():
+            raise RuntimeError(f"Adjacency file not found: {path.name}")
+        data = self._load_gradient_classification_adjacency_npz(path)
+        self._gradient_classification_adjacency_cache = data
+        return data
+
+    def _set_gradient_classification_adjacency(self, path: Path) -> bool:
+        try:
+            data = self._load_gradient_classification_adjacency_npz(path)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to load classification adjacency: {exc}")
+            return False
+        self._gradient_classification_adjacency_path = str(path)
+        self._gradient_classification_adjacency_cache = data
+        self._sync_gradients_dialog_state()
+        self.statusBar().showMessage(f"Loaded classification adjacency from {path.name}.")
+        return True
+
+    def _select_gradient_classification_adjacency(self) -> None:
+        start_dir = self._default_results_dir()
+        existing = str(self._gradient_classification_adjacency_path or "").strip()
+        if existing:
+            existing_path = Path(existing)
+            if existing_path.exists():
+                start_dir = existing_path.parent
+        else:
+            source_path = self._current_source_path()
+            if source_path is not None and source_path.exists():
+                start_dir = source_path.parent
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select classification adjacency NPZ",
+            str(start_dir),
+            "NumPy archive (*.npz);;All files (*)",
+        )
+        if not selected:
+            return
+        self._set_gradient_classification_adjacency(Path(selected))
+
+    def _clear_gradient_classification_adjacency(self, *, show_status: bool = True) -> None:
+        self._gradient_classification_adjacency_path = ""
+        self._gradient_classification_adjacency_cache = None
+        self._sync_gradients_dialog_state()
+        if show_status:
+            self.statusBar().showMessage("Removed classification adjacency.")
+
+    def _classification_scatter_edge_pairs(self, projection_labels, finite_mask):
+        adjacency_data = self._gradient_classification_adjacency_data()
+        if not adjacency_data:
+            return np.zeros((0, 2), dtype=int), None
+
+        labels = np.asarray(projection_labels, dtype=int).reshape(-1)
+        mask = np.asarray(finite_mask, dtype=bool).reshape(-1)
+        if labels.shape != mask.shape:
+            raise RuntimeError("Classification labels do not align with the scatter mask.")
+        labels = labels[mask]
+        if labels.size < 2:
+            return np.zeros((0, 2), dtype=int), None
+
+        adjacency = np.asarray(adjacency_data["adjacency"], dtype=float)
+        adjacency_labels = np.asarray(adjacency_data["parcel_labels"], dtype=int).reshape(-1)
+        label_to_index = {int(label): idx for idx, label in enumerate(adjacency_labels.tolist())}
+
+        mapped_positions = []
+        mapped_indices = []
+        missing_count = 0
+        for scatter_index, label in enumerate(labels.tolist()):
+            adjacency_index = label_to_index.get(int(label))
+            if adjacency_index is None:
+                missing_count += 1
+                continue
+            mapped_positions.append(int(scatter_index))
+            mapped_indices.append(int(adjacency_index))
+
+        if len(mapped_indices) < 2:
+            note = (
+                "Adjacency file does not overlap with the current classification labels."
+                if missing_count
+                else "Adjacency file does not contain enough nodes for edge rendering."
+            )
+            return np.zeros((0, 2), dtype=int), note
+
+        mapped_positions = np.asarray(mapped_positions, dtype=int)
+        mapped_indices = np.asarray(mapped_indices, dtype=int)
+        edge_matrix = np.asarray(adjacency[np.ix_(mapped_indices, mapped_indices)], dtype=float)
+        edge_matrix = np.nan_to_num(edge_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+        edge_matrix = np.maximum(np.abs(edge_matrix), np.abs(edge_matrix.T))
+        upper_i, upper_j = np.triu_indices(edge_matrix.shape[0], k=1)
+        keep = edge_matrix[upper_i, upper_j] > 0.0
+        if not np.any(keep):
+            note = "Adjacency file loaded, but no non-zero edges matched the displayed nodes."
+            return np.zeros((0, 2), dtype=int), note
+
+        edge_pairs = np.column_stack(
+            (
+                mapped_positions[upper_i[keep]],
+                mapped_positions[upper_j[keep]],
+            )
+        ).astype(int, copy=False)
+        note = f"Adjacency edges: {edge_pairs.shape[0]}"
+        if missing_count:
+            note += f" ({missing_count} labels unmatched)"
+        return edge_pairs, note
+
+    @staticmethod
+    def _gradient_entry_source_path(entry):
+        if entry is None:
+            return None
+        source_path = entry.get("source_path", entry.get("path"))
+        if not source_path:
+            return None
+        return Path(source_path)
+
+    def _gradient_matrix_label_for_entry(self, entry) -> str:
+        if entry is None:
+            return ""
+        label = str(entry.get("label") or "").strip()
+        key = str(entry.get("selected_key") or "").strip()
+        source_path = self._gradient_entry_source_path(entry)
+        if not label and source_path is not None:
+            label = source_path.name
+        if key and key not in label:
+            label = f"{label} [{key}]" if label else key
+        return label or "matrix"
+
+    def _available_gradient_matrix_entries(self):
+        options = []
+        for entry_id in self._entry_ids():
+            entry = self._entries.get(entry_id)
+            if entry is None:
+                continue
+            options.append(
+                {
+                    "id": entry_id,
+                    "label": self._gradient_matrix_label_for_entry(entry),
+                }
+            )
+        return options
+
+    def _selected_gradient_entry_id(self):
+        stored = self._gradient_selected_entry_id
+        if stored in self._entries:
+            return stored
+        current = self._current_entry_id()
+        if current in self._entries:
+            return current
+        for option in self._available_gradient_matrix_entries():
+            entry_id = option.get("id")
+            if entry_id in self._entries:
+                return entry_id
+        return None
+
+    def _selected_gradient_entry(self):
+        entry_id = self._selected_gradient_entry_id()
+        if entry_id is None:
+            return None
+        return self._entries.get(entry_id)
+
+    def _gradient_matrix_for_entry(self, entry):
+        if entry is None:
+            return None
+        if entry is self._current_entry() and self._current_matrix is not None:
+            return np.asarray(self._current_matrix)
+        matrix, _selected_key = self._matrix_for_entry(entry)
+        return np.asarray(matrix)
+
+    def _has_square_matrix_entry(self, entry) -> bool:
+        if entry is None:
+            return False
+        try:
+            matrix = self._gradient_matrix_for_entry(entry)
+        except Exception:
+            return False
+        return matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
+
+    def _selected_gradient_matrix_label(self) -> str:
+        return self._gradient_matrix_label_for_entry(self._selected_gradient_entry())
+
+    def _on_gradient_matrix_entry_changed(self, entry_id) -> None:
+        normalized_id = entry_id if entry_id in self._entries else None
+        if normalized_id == self._gradient_selected_entry_id:
+            return
+        self._gradient_selected_entry_id = normalized_id
+        self._reset_gradients_output()
+
+    def _on_gradient_network_component_changed(self, value: str) -> None:
+        self._gradient_network_component = self._normalize_gradient_network_component(
+            value,
+            max_components=self._available_gradient_network_component_count(),
+        )
+
+    def _on_gradient_rotation_changed(self, index: int, value: str) -> None:
+        try:
+            idx = int(index)
+        except Exception:
+            return
+        if idx < 0 or idx >= 10:
+            return
+        self._ensure_gradient_rotation_count(idx + 1)
+        self._gradient_component_rotations[idx] = self._normalize_gradient_rotation_preset(value)
+
+    def _sync_gradients_dialog_state(self) -> None:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is None:
+            return
+        matrix_options = self._available_gradient_matrix_entries()
+        selected_entry_id = self._selected_gradient_entry_id()
+        if self._gradient_selected_entry_id not in self._entries:
+            self._gradient_selected_entry_id = selected_entry_id
+        selected_entry = self._selected_gradient_entry()
+        names = self._available_colormap_names()
+        current_cmap = str(self._gradient_colormap_name or "").strip()
+        if current_cmap not in names:
+            current_cmap = (
+                self._default_gradient_colormap
+                if self._default_gradient_colormap in names
+                else (names[0] if names else "spectrum_fsl")
+            )
+            self._gradient_colormap_name = current_cmap
+        dialog.set_matrix_options(matrix_options, selected_entry_id=selected_entry_id)
+        dialog.set_matrix_source(self._gradient_matrix_label_for_entry(selected_entry))
+        dialog.set_component_count(self._current_gradient_component_count())
+        dialog.set_colormap_names(names, current_colormap=current_cmap)
+        dialog.set_parcellation_path(self._active_parcellation_path)
+        dialog.set_hemisphere_mode(self._selected_gradient_hemisphere_mode())
+        dialog.set_surface_mesh(self._selected_gradient_surface_mesh())
+        dialog.set_classification_surface_mesh(self._selected_gradient_classification_surface_mesh())
+        dialog.set_classification_hemisphere_mode(self._selected_gradient_classification_hemisphere_mode())
+        dialog.set_scatter_rotation(self._selected_gradient_scatter_rotation())
+        dialog.set_triangular_rgb(self._selected_gradient_triangular_rgb())
+        dialog.set_classification_fit_mode(self._selected_gradient_classification_fit_mode())
+        dialog.set_triangular_color_order(self._selected_gradient_triangular_color_order())
+        dialog.set_classification_colormap(self._selected_gradient_classification_colormap())
+        dialog.set_classification_component_options(
+            self._available_gradient_network_component_count(),
+            selected_component=self._selected_gradient_classification_component(),
+        )
+        dialog.set_classification_axes(
+            self._selected_gradient_classification_x_axis(),
+            self._selected_gradient_classification_y_axis(),
+        )
+        dialog.set_classification_adjacency_path(self._gradient_classification_adjacency_path)
+        dialog.set_network_component_options(
+            self._available_gradient_network_component_count(),
+            selected_component=self._selected_gradient_network_component(),
+        )
+        dialog.set_rotation_presets(self._current_gradient_rotation_presets())
+        progress = self._gradients_progress_state
+        dialog.set_progress(
+            progress["minimum"],
+            progress["maximum"],
+            progress["value"],
+            progress["text"],
+        )
+        dialog.set_can_compute(self._has_square_matrix_entry(selected_entry))
+        dialog.set_busy(self._gradients_busy)
+        dialog.set_has_results(bool(self._last_gradients))
+        dialog.set_can_classify(self._can_classify_gradients())
+
+    def _open_gradients_dialog(self) -> None:
+        if getattr(self, "_gradients_dialog", None) is None:
+            try:
+                from window.gradients_prepare import GradientsPrepareDialog
+            except Exception:
+                try:
+                    from mrsi_viewer.window.gradients_prepare import GradientsPrepareDialog
+                except Exception as exc:
+                    self.statusBar().showMessage(f"Failed to open Gradients window: {exc}")
+                    return
+
+            self._gradients_dialog = GradientsPrepareDialog(
+                theme_name=self._theme_name,
+                component_count=self._gradient_component_count,
+                colormap_names=self._available_colormap_names(),
+                current_colormap=self._gradient_colormap_name,
+                parcellation_path=self._active_parcellation_path,
+                open_parcellation_callback=self._select_parcellation_template,
+                compute_callback=self._compute_gradients,
+                save_callback=self._save_gradients_projection,
+                render_3d_callback=self._render_gradients_3d,
+                classify_callback=self._classify_gradients_fsaverage,
+                render_network_callback=self._render_gradients_network,
+                matrix_changed_callback=self._on_gradient_matrix_entry_changed,
+                component_changed_callback=self._on_gradient_component_changed,
+                colormap_changed_callback=self._on_gradient_colormap_changed,
+                hemisphere_changed_callback=self._on_gradient_hemisphere_changed,
+                surface_mesh_changed_callback=self._on_gradient_surface_mesh_changed,
+                classification_surface_mesh_changed_callback=self._on_gradient_classification_surface_mesh_changed,
+                classification_hemisphere_changed_callback=self._on_gradient_classification_hemisphere_changed,
+                scatter_rotation_changed_callback=self._on_gradient_scatter_rotation_changed,
+                triangular_rgb_changed_callback=self._on_gradient_triangular_rgb_changed,
+                classification_fit_mode_changed_callback=self._on_gradient_classification_fit_mode_changed,
+                triangular_color_order_changed_callback=self._on_gradient_triangular_color_order_changed,
+                classification_colormap_changed_callback=self._on_gradient_classification_colormap_changed,
+                classification_component_changed_callback=self._on_gradient_classification_component_changed,
+                classification_x_axis_changed_callback=self._on_gradient_classification_x_axis_changed,
+                classification_y_axis_changed_callback=self._on_gradient_classification_y_axis_changed,
+                open_classification_adjacency_callback=self._select_gradient_classification_adjacency,
+                remove_classification_adjacency_callback=self._clear_gradient_classification_adjacency,
+                network_component_changed_callback=self._on_gradient_network_component_changed,
+                rotation_changed_callback=self._on_gradient_rotation_changed,
+                parent=self,
+            )
+
+        self._sync_gradients_dialog_state()
+        self._gradients_dialog.show()
+        try:
+            self._gradients_dialog.raise_()
+            self._gradients_dialog.activateWindow()
+        except Exception:
+            pass
+        self.statusBar().showMessage("Opened Gradients window.")
 
     def _current_nbs_source(self):
         entry = self._current_entry()
@@ -3411,12 +4879,14 @@ class ConnectomeViewer(QMainWindow):
         if not hasattr(self, "nbs_prepare_button"):
             if hasattr(self, "nbs_prepare_action"):
                 self.nbs_prepare_action.setEnabled(enabled)
+            self._update_gradients_button()
             self._update_selector_prepare_button()
             self._update_harmonize_prepare_button()
             return
         self.nbs_prepare_button.setEnabled(enabled)
         if hasattr(self, "nbs_prepare_action"):
             self.nbs_prepare_action.setEnabled(enabled)
+        self._update_gradients_button()
         self._update_selector_prepare_button()
         self._update_harmonize_prepare_button()
 
@@ -3815,18 +5285,22 @@ class ConnectomeViewer(QMainWindow):
         self._batch_import_dialog = dialog
         if hasattr(dialog, "set_theme"):
             dialog.set_theme(self._theme_name)
-        if dialog.exec() != _dialog_accepted_code():
-            return []
+        try:
+            if dialog.exec() != _dialog_accepted_code():
+                return []
 
-        selected_paths = dialog.selected_paths()
-        added_paths = self._add_files(selected_paths)
-        if not added_paths:
-            self.statusBar().showMessage("No new batch files were added.")
-            return []
-        self.statusBar().showMessage(
-            f"Added {len(added_paths)} matrix files from {folder_path.name}."
-        )
-        return added_paths
+            selected_paths = dialog.selected_paths()
+            added_paths = self._add_files(selected_paths)
+            if not added_paths:
+                self.statusBar().showMessage("No new batch files were added.")
+                return []
+            self.statusBar().showMessage(
+                f"Added {len(added_paths)} matrix files from {folder_path.name}."
+            )
+            return added_paths
+        finally:
+            if self._batch_import_dialog is dialog:
+                self._batch_import_dialog = None
 
     def _open_batch_folder(self) -> None:
         selected_dir = QFileDialog.getExistingDirectory(
@@ -4079,11 +5553,6 @@ class ConnectomeViewer(QMainWindow):
     def _reload_colormaps(self) -> None:
         names = self._available_colormap_names()
         current = self.cmap_combo.currentText() if hasattr(self, "cmap_combo") else ""
-        current_3d = (
-            self.gradients_cmap_combo.currentText()
-            if hasattr(self, "gradients_cmap_combo")
-            else ""
-        )
         self.cmap_combo.blockSignals(True)
         self.cmap_combo.clear()
         self.cmap_combo.addItems(names)
@@ -4096,27 +5565,114 @@ class ConnectomeViewer(QMainWindow):
         elif names:
             self.cmap_combo.setCurrentIndex(0)
         self.cmap_combo.blockSignals(False)
-
-        if hasattr(self, "gradients_cmap_combo"):
-            self.gradients_cmap_combo.blockSignals(True)
-            self.gradients_cmap_combo.clear()
-            self.gradients_cmap_combo.addItems(names)
-            if current_3d and current_3d in names:
-                self.gradients_cmap_combo.setCurrentText(current_3d)
-            elif self._default_gradient_colormap in names:
-                self.gradients_cmap_combo.setCurrentText(self._default_gradient_colormap)
+        current_3d = str(self._gradient_colormap_name or "").strip()
+        if current_3d not in names:
+            if self._default_gradient_colormap in names:
+                current_3d = self._default_gradient_colormap
             elif "spectrum_fsl" in names:
-                self.gradients_cmap_combo.setCurrentText("spectrum_fsl")
+                current_3d = "spectrum_fsl"
             elif names:
-                self.gradients_cmap_combo.setCurrentIndex(0)
-            self.gradients_cmap_combo.blockSignals(False)
+                current_3d = names[0]
+            else:
+                current_3d = "spectrum_fsl"
+            self._gradient_colormap_name = current_3d
+        self._sync_gradients_dialog_state()
 
-    def _selected_colormap_name(self) -> str:
+    def _default_entry_display_settings(self):
+        return {
+            "matrix_colormap": self._default_matrix_colormap,
+            "display_auto": True,
+            "display_min_text": "",
+            "display_max_text": "",
+            "display_scale": "linear",
+        }
+
+    def _ensure_entry_display_settings(self, entry):
+        if entry is None:
+            return None
+        defaults = self._default_entry_display_settings()
+        available_names = self._available_colormap_names()
+        cmap_name = str(entry.get("matrix_colormap", defaults["matrix_colormap"]) or "").strip()
+        if not cmap_name or (available_names and cmap_name not in available_names):
+            if defaults["matrix_colormap"] in available_names:
+                cmap_name = defaults["matrix_colormap"]
+            elif DEFAULT_COLORMAP in available_names:
+                cmap_name = DEFAULT_COLORMAP
+            elif available_names:
+                cmap_name = available_names[0]
+            else:
+                cmap_name = defaults["matrix_colormap"]
+        entry["matrix_colormap"] = cmap_name
+        entry["display_auto"] = bool(entry.get("display_auto", defaults["display_auto"]))
+        entry["display_min_text"] = str(entry.get("display_min_text", defaults["display_min_text"]) or "").strip()
+        entry["display_max_text"] = str(entry.get("display_max_text", defaults["display_max_text"]) or "").strip()
+        scale_name = str(entry.get("display_scale", defaults["display_scale"]) or "").strip().lower()
+        entry["display_scale"] = "log" if scale_name.startswith("log") else "linear"
+        return entry
+
+    def _load_display_controls_for_entry(self, entry) -> None:
+        if entry is None:
+            return
+        self._ensure_entry_display_settings(entry)
+
+        self.cmap_combo.blockSignals(True)
+        cmap_name = str(entry.get("matrix_colormap") or "").strip()
+        if cmap_name and self.cmap_combo.findText(cmap_name) >= 0:
+            self.cmap_combo.setCurrentText(cmap_name)
+        elif self.cmap_combo.count() > 0:
+            self.cmap_combo.setCurrentIndex(0)
+            entry["matrix_colormap"] = self.cmap_combo.currentText().strip() or DEFAULT_COLORMAP
+        self.cmap_combo.blockSignals(False)
+
+        auto_scale = bool(entry.get("display_auto", True))
+        self.display_auto_check.blockSignals(True)
+        self.display_auto_check.setChecked(auto_scale)
+        self.display_auto_check.blockSignals(False)
+
+        self.display_min_edit.blockSignals(True)
+        self.display_min_edit.setText(str(entry.get("display_min_text", "") or ""))
+        self.display_min_edit.blockSignals(False)
+
+        self.display_max_edit.blockSignals(True)
+        self.display_max_edit.setText(str(entry.get("display_max_text", "") or ""))
+        self.display_max_edit.blockSignals(False)
+
+        self.display_scale_combo.blockSignals(True)
+        self.display_scale_combo.setCurrentText("Log" if entry.get("display_scale") == "log" else "Linear")
+        self.display_scale_combo.blockSignals(False)
+
+        self.display_min_edit.setEnabled(not auto_scale)
+        self.display_max_edit.setEnabled(not auto_scale)
+
+    def _store_display_controls_for_entry(self, entry) -> None:
+        if entry is None:
+            return
+        self._ensure_entry_display_settings(entry)
+        entry["matrix_colormap"] = self.cmap_combo.currentText().strip() or DEFAULT_COLORMAP
+        entry["display_auto"] = bool(self.display_auto_check.isChecked())
+        entry["display_min_text"] = self.display_min_edit.text().strip()
+        entry["display_max_text"] = self.display_max_edit.text().strip()
+        entry["display_scale"] = (
+            "log" if self.display_scale_combo.currentText().strip().lower().startswith("log") else "linear"
+        )
+
+    def _on_colormap_changed(self, *_args) -> None:
+        entry = self._current_entry()
+        if entry is None:
+            return
+        self._store_display_controls_for_entry(entry)
+        self._plot_selected()
+
+    def _selected_colormap_name(self, entry=None) -> str:
+        if entry is not None:
+            self._ensure_entry_display_settings(entry)
+            name = str(entry.get("matrix_colormap") or "").strip()
+            return name or DEFAULT_COLORMAP
         name = self.cmap_combo.currentText().strip()
         return name or DEFAULT_COLORMAP
 
-    def _selected_colormap(self):
-        name = self._selected_colormap_name()
+    def _selected_colormap(self, entry=None):
+        name = self._selected_colormap_name(entry)
         if name in self._custom_cmaps:
             try:
                 return self._colorbar.load_fsl_cmap(name)
@@ -4142,13 +5698,22 @@ class ConnectomeViewer(QMainWindow):
         elided = metrics.elidedText(full_title, Qt.ElideRight, avail)
         self.plot_title_label.setText(elided)
 
-    def _current_display_limits(self):
-        if not hasattr(self, "display_auto_check") or self.display_auto_check.isChecked():
+    def _current_display_limits(self, entry=None):
+        if entry is not None:
+            self._ensure_entry_display_settings(entry)
+            auto_scale = bool(entry.get("display_auto", True))
+            min_text = str(entry.get("display_min_text", "") or "").strip()
+            max_text = str(entry.get("display_max_text", "") or "").strip()
+        else:
+            if not hasattr(self, "display_auto_check"):
+                return None, None, None
+            auto_scale = bool(self.display_auto_check.isChecked())
+            min_text = self.display_min_edit.text().strip() if hasattr(self, "display_min_edit") else ""
+            max_text = self.display_max_edit.text().strip() if hasattr(self, "display_max_edit") else ""
+        if auto_scale:
             return None, None, None
         vmin = None
         vmax = None
-        min_text = self.display_min_edit.text().strip() if hasattr(self, "display_min_edit") else ""
-        max_text = self.display_max_edit.text().strip() if hasattr(self, "display_max_edit") else ""
         if min_text:
             try:
                 vmin = float(min_text)
@@ -4163,10 +5728,14 @@ class ConnectomeViewer(QMainWindow):
             return None, None, "Display min must be smaller than max."
         return vmin, vmax, None
 
-    def _current_display_scale(self) -> str:
-        if not hasattr(self, "display_scale_combo"):
-            return "linear"
-        choice = self.display_scale_combo.currentText().strip().lower()
+    def _current_display_scale(self, entry=None) -> str:
+        if entry is not None:
+            self._ensure_entry_display_settings(entry)
+            choice = str(entry.get("display_scale", "linear") or "").strip().lower()
+        else:
+            if not hasattr(self, "display_scale_combo"):
+                return "linear"
+            choice = self.display_scale_combo.currentText().strip().lower()
         if choice.startswith("log"):
             return "log"
         return "linear"
@@ -4194,7 +5763,9 @@ class ConnectomeViewer(QMainWindow):
         auto_scale = self.display_auto_check.isChecked()
         self.display_min_edit.setEnabled(not auto_scale)
         self.display_max_edit.setEnabled(not auto_scale)
-        if self._current_entry_id() is not None:
+        entry = self._current_entry()
+        if entry is not None:
+            self._store_display_controls_for_entry(entry)
             self._plot_selected()
 
     def _on_zoom_region_toggled(self, *_args) -> None:
@@ -4356,14 +5927,25 @@ class ConnectomeViewer(QMainWindow):
         self._refresh_sidebar_toggle_buttons()
 
     def _selected_surface_colormap_name(self) -> str:
-        if hasattr(self, "gradients_cmap_combo"):
-            name = self.gradients_cmap_combo.currentText().strip()
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None:
+            try:
+                name = dialog.selected_colormap()
+            except Exception:
+                name = ""
             if name:
+                self._gradient_colormap_name = name
                 return name
+        name = str(self._gradient_colormap_name or "").strip()
+        if name:
+            return name
         return "spectrum_fsl"
 
-    def _selected_surface_colormap(self):
-        name = self._selected_surface_colormap_name()
+    def _selected_surface_colormap(self, name: str = None):
+        if name is None:
+            name = self._selected_surface_colormap_name()
+        else:
+            name = str(name or "").strip() or self._selected_surface_colormap_name()
         if name == "spectrum_fsl":
             try:
                 return self._colorbar.load_fsl_cmap(name)
@@ -4570,16 +6152,32 @@ class ConnectomeViewer(QMainWindow):
         if self.file_list.count() == 0:
             self.statusBar().showMessage("No matrices to export.")
             return
-        save_path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Export connectome grid",
-            str(self._default_results_dir() / "connectome_grid.pdf"),
-            "PDF (*.pdf);;SVG (*.svg);;PNG (*.png)",
+        current_entry = self._current_entry()
+        if current_entry is not None:
+            self._store_display_controls_for_entry(current_entry)
+
+        default_output_path = self._export_grid_output_path or str(
+            self._default_results_dir() / "connectome_grid.pdf"
         )
-        if not save_path:
+        dialog = ExportGridDialog(
+            default_path=default_output_path,
+            default_columns=self._export_grid_columns,
+            rotate=self._export_grid_rotate,
+            parent=self,
+        )
+        dialog.setStyleSheet(self.styleSheet())
+        dialog.set_theme(self._theme_name)
+        if dialog.exec() != _dialog_accepted_code():
             return
 
-        output_path = Path(save_path)
+        values = dialog.values()
+        self._export_grid_output_path = values["output_path"]
+        self._export_grid_columns = int(values["columns"])
+        self._export_grid_rotate = bool(values["rotate"])
+        self._export_grid_selected_filter = str(values.get("selected_filter") or "PDF (*.pdf)")
+
+        output_path = Path(values["output_path"]).expanduser()
+        selected_filter = self._export_grid_selected_filter
         if output_path.suffix.lower() not in {".pdf", ".svg", ".png"}:
             if "PDF" in selected_filter:
                 output_path = output_path.with_suffix(".pdf")
@@ -4587,15 +6185,9 @@ class ConnectomeViewer(QMainWindow):
                 output_path = output_path.with_suffix(".svg")
             else:
                 output_path = output_path.with_suffix(".png")
+        self._export_grid_output_path = str(output_path)
 
-        colormap = self._selected_colormap()
-        vmin, vmax, scaling_error = self._current_display_limits()
-        if scaling_error:
-            self.statusBar().showMessage(scaling_error)
-            return
-        zscale = self._current_display_scale()
-        matrices = []
-        titles = []
+        plot_items = []
         skipped = []
         for entry_id in self._entry_ids():
             entry = self._entries.get(entry_id)
@@ -4607,21 +6199,34 @@ class ConnectomeViewer(QMainWindow):
                 label = entry.get("label", entry_id)
                 skipped.append(f"{label} ({exc})")
                 continue
+            label = entry.get("label", entry_id)
+            vmin, vmax, scaling_error = self._current_display_limits(entry)
+            if scaling_error:
+                self.statusBar().showMessage(f"{label}: {scaling_error}")
+                return
+            zscale = self._current_display_scale(entry)
             if zscale == "log":
                 log_error = self._log_scale_error(matrix, vmin, vmax)
                 if log_error:
-                    label = entry.get("label", entry_id)
                     self.statusBar().showMessage(f"{label}: {log_error}")
                     return
-            matrices.append(matrix)
-            titles.append(self.titles.get(entry_id, entry.get("label", "Matrix")))
+            plot_items.append(
+                {
+                    "matrix": matrix,
+                    "title": self.titles.get(entry_id, entry.get("label", "Matrix")),
+                    "colormap": self._selected_colormap(entry),
+                    "vmin": vmin,
+                    "vmax": vmax,
+                    "zscale": zscale,
+                }
+            )
 
-        if not matrices:
+        if not plot_items:
             self.statusBar().showMessage("No matrices exported (missing keys or load errors).")
             return
 
-        cols = min(self.export_cols_spin.value(), len(matrices))
-        rows = int(math.ceil(len(matrices) / cols))
+        cols = min(self._export_grid_columns, len(plot_items))
+        rows = int(math.ceil(len(plot_items) / cols))
         export_figure = Figure(figsize=(4 * cols, 4 * rows))
         axes = export_figure.subplots(rows, cols)
         if isinstance(axes, np.ndarray):
@@ -4629,23 +6234,24 @@ class ConnectomeViewer(QMainWindow):
         else:
             flat_axes = [axes]
 
-        rotate = self.export_rotate_check.isChecked()
-        for idx, (matrix, title) in enumerate(zip(matrices, titles)):
+        rotate = self._export_grid_rotate
+        for idx, plot_item in enumerate(plot_items):
+            matrix = plot_item["matrix"]
             ax = flat_axes[idx]
             SimMatrixPlot.plot_simmatrix(
                 matrix,
                 ax=ax,
-                titles=title,
-                colormap=colormap,
-                vmin=vmin,
-                vmax=vmax,
-                zscale=zscale,
+                titles=plot_item["title"],
+                colormap=plot_item["colormap"],
+                vmin=plot_item["vmin"],
+                vmax=plot_item["vmax"],
+                zscale=plot_item["zscale"],
             )
             _remove_axes_border(ax)
             if rotate:
-                _apply_rotation(ax, matrix, -45.0)
+                _apply_rotation(ax, matrix, 45.0)
 
-        for ax in flat_axes[len(matrices):]:
+        for ax in flat_axes[len(plot_items):]:
             ax.axis("off")
 
         export_figure.tight_layout()
@@ -4653,11 +6259,11 @@ class ConnectomeViewer(QMainWindow):
 
         if skipped:
             self.statusBar().showMessage(
-                f"Exported {len(matrices)} matrices to {output_path.name}. "
+                f"Exported {len(plot_items)} matrices to {output_path.name}. "
                 f"Skipped {len(skipped)}."
             )
         else:
-            self.statusBar().showMessage(f"Exported {len(matrices)} matrices to {output_path.name}.")
+            self.statusBar().showMessage(f"Exported {len(plot_items)} matrices to {output_path.name}.")
 
     def _on_selection_changed(self, current, _previous) -> None:
         if current is None:
@@ -4685,6 +6291,7 @@ class ConnectomeViewer(QMainWindow):
         source_path = entry.get("source_path", entry.get("path"))
         if source_path:
             self._refresh_covars_options(source_path, entry)
+        self._load_display_controls_for_entry(entry)
 
         if entry.get("auto_title", True):
             self._apply_title_for_entry(entry, force=True)
@@ -4692,6 +6299,7 @@ class ConnectomeViewer(QMainWindow):
             self.title_edit.setText(self.titles.get(entry_id, entry.get("label", "Matrix")))
         self._plot_selected()
         self._update_write_to_file_button()
+        self._update_view_labels_button()
 
     def _plot_selected(self, *_args) -> None:
         entry_id = self._current_entry_id()
@@ -4702,6 +6310,7 @@ class ConnectomeViewer(QMainWindow):
         if entry is None:
             self._clear_plot()
             return
+        self._store_display_controls_for_entry(entry)
 
         if entry.get("kind") == "derived":
             matrix = entry.get("matrix")
@@ -4753,13 +6362,13 @@ class ConnectomeViewer(QMainWindow):
         self._current_parcel_labels = labels_list
         self._current_parcel_names = names_list
 
-        vmin, vmax, scaling_error = self._current_display_limits()
+        vmin, vmax, scaling_error = self._current_display_limits(entry)
         if scaling_error:
             self.statusBar().showMessage(scaling_error)
             return
 
-        colormap = self._selected_colormap()
-        zscale = self._current_display_scale()
+        colormap = self._selected_colormap(entry)
+        zscale = self._current_display_scale(entry)
         if zscale == "log":
             log_error = self._log_scale_error(matrix, vmin, vmax)
             if log_error:
@@ -4771,11 +6380,27 @@ class ConnectomeViewer(QMainWindow):
         SimMatrixPlot.plot_simmatrix(
             matrix,
             ax=ax,
-            titles=None,
+            titles=current_title,
             colormap=colormap,
             vmin=vmin,
             vmax=vmax,
             zscale=zscale,
+        )
+        self._hover_vline = ax.axvline(
+            0.0,
+            color="#22c55e",
+            linewidth=0.8,
+            alpha=0.85,
+            visible=False,
+            zorder=20,
+        )
+        self._hover_hline = ax.axhline(
+            0.0,
+            color="#22c55e",
+            linewidth=0.8,
+            alpha=0.85,
+            visible=False,
+            zorder=20,
         )
         _remove_axes_border(ax)
         self._current_axes = ax
@@ -4962,12 +6587,18 @@ class ConnectomeViewer(QMainWindow):
 
     def _compute_gradients(self) -> None:
         self._reset_gradients_output()
-        if self._current_matrix is None:
-            self.statusBar().showMessage("No matrix selected for gradients.")
+        entry = self._selected_gradient_entry()
+        if entry is None:
+            self.statusBar().showMessage("No workspace matrix selected for gradients.")
             return
-        conn_matrix = np.asarray(self._current_matrix, dtype=float)
+        matrix_label = self._gradient_matrix_label_for_entry(entry)
+        try:
+            conn_matrix = np.asarray(self._gradient_matrix_for_entry(entry), dtype=float)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to load {matrix_label} for gradients: {exc}")
+            return
         if conn_matrix.ndim != 2 or conn_matrix.shape[0] != conn_matrix.shape[1]:
-            self.statusBar().showMessage("Gradients require a square matrix.")
+            self.statusBar().showMessage(f"Gradients require a square matrix. {matrix_label} is not square.")
             return
 
         source_dir = self._default_results_dir()
@@ -4988,7 +6619,7 @@ class ConnectomeViewer(QMainWindow):
             self.statusBar().showMessage("No active parcellation template.")
             return
 
-        source_path = self._current_source_path()
+        source_path = self._gradient_entry_source_path(entry)
         if source_path is None or not source_path.exists():
             self.statusBar().showMessage("Projection requires a source .npz with parcel labels.")
             return
@@ -5012,13 +6643,16 @@ class ConnectomeViewer(QMainWindow):
             return
         projection_labels = [label_indices[idx] for idx in keep_indices]
 
-        n_grad = self.gradients_spin.value()
-        self.gradients_progress.setRange(0, n_grad)
-        self.gradients_progress.setValue(0)
-        self.gradients_progress.setFormat(f"0/{n_grad} components")
-        self.gradients_compute_button.setEnabled(False)
-        self.gradients_spin.setEnabled(False)
-        self.select_parcellation_button.setEnabled(False)
+        _, parcel_names = self._load_parcel_metadata_cached(source_path)
+        parcel_names = _to_string_list(parcel_names)
+        kept_names = None
+        if parcel_names and len(parcel_names) == conn_matrix.shape[0]:
+            kept_names = [parcel_names[idx] for idx in keep_indices]
+
+        n_grad = self._current_gradient_component_count()
+        self._gradients_busy = True
+        self._set_gradients_progress(0, n_grad, 0, f"0/{n_grad} components")
+        self._sync_gradients_dialog_state()
         QApplication.processEvents()
 
         gradients = np.zeros((conn_matrix.shape[0], n_grad), dtype=float)
@@ -5053,18 +6687,20 @@ class ConnectomeViewer(QMainWindow):
                     self.statusBar().showMessage(f"Failed to project component {comp_idx}: {exc}")
                     return
                 projected_maps.append(np.asarray(projected, dtype=np.float32))
-                self.gradients_progress.setValue(comp_idx)
-                self.gradients_progress.setFormat(f"{comp_idx}/{n_grad} components")
+                self._set_gradients_progress(0, n_grad, comp_idx, f"{comp_idx}/{n_grad} components")
                 QApplication.processEvents()
         finally:
-            self.gradients_compute_button.setEnabled(True)
-            self.gradients_spin.setEnabled(True)
-            self.select_parcellation_button.setEnabled(True)
+            self._gradients_busy = False
+            self._sync_gradients_dialog_state()
 
         if n_grad == 1:
             output_data = projected_maps[0]
         else:
             output_data = np.stack(projected_maps, axis=-1)
+        support_mask = np.asarray(
+            np.isin(template_data, np.asarray(projection_labels, dtype=int)),
+            dtype=np.float32,
+        )
 
         source_stem = source_path.stem if source_path is not None else "matrix"
         default_name = f"{source_stem}_diffusion_components-{n_grad}.nii.gz"
@@ -5076,16 +6712,21 @@ class ConnectomeViewer(QMainWindow):
             "projected_data": np.asarray(output_data, dtype=np.float32),
             "affine": np.asarray(template_img.affine, dtype=float),
             "header": template_img.header.copy(),
-            "source_name": source_path.name if source_path is not None else "matrix",
+            "source_name": matrix_label or (source_path.name if source_path is not None else "matrix"),
             "source_dir": str(source_dir),
             "output_name": default_name,
+            "keep_indices": np.asarray(keep_indices, dtype=int),
+            "projection_labels": np.asarray(projection_labels, dtype=int),
+            "support_mask": support_mask,
+            "template_path": str(self._active_parcellation_path) if self._active_parcellation_path else "",
+            "parcel_names": kept_names,
+            "matrix_entry_id": self._selected_gradient_entry_id(),
+            "matrix_label": matrix_label,
         }
-        self.gradients_save_button.setEnabled(True)
-        self.gradients_render_button.setEnabled(True)
-        self.gradients_progress.setValue(n_grad)
-        self.gradients_progress.setFormat(f"{n_grad}/{n_grad} components (done)")
+        self._set_gradients_progress(0, n_grad, n_grad, f"{n_grad}/{n_grad} components (done)")
+        self._sync_gradients_dialog_state()
         self.statusBar().showMessage(
-            f"Computed {n_grad} projected component(s). Click Save or Render 3D."
+            f"Computed {n_grad} projected component(s). Click Write to File, Render fsaverage, Classify, or Render Network."
         )
 
     def _save_gradients_projection(self) -> None:
@@ -5137,34 +6778,218 @@ class ConnectomeViewer(QMainWindow):
             return
         self.statusBar().showMessage(f"Saved projection to {output_path.name}.")
 
+    @staticmethod
+    def _compute_spectral_coords_and_order(matrix: np.ndarray):
+        matrix = np.asarray(matrix, dtype=float)
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            raise ValueError("Projection matrix must be square.")
+
+        n_nodes = matrix.shape[0]
+        matrix = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0)
+        matrix = 0.5 * (matrix + matrix.T)
+        np.fill_diagonal(matrix, 0.0)
+
+        if n_nodes == 0:
+            return np.zeros((0, 2), dtype=float), np.zeros(0, dtype=int)
+        if n_nodes == 1:
+            return np.array([[1.0, 0.0]], dtype=float), np.array([0], dtype=int)
+        if n_nodes == 2:
+            return np.array([[-1.0, 0.0], [1.0, 0.0]], dtype=float), np.array([0, 1], dtype=int)
+
+        degree = np.sum(matrix, axis=1)
+        laplacian = np.diag(degree) - matrix
+        _eigvals, eigvecs = np.linalg.eigh(laplacian)
+        if eigvecs.shape[1] < 3:
+            raise ValueError("Could not compute the second and third Laplacian eigenvectors.")
+
+        coords = np.asarray(eigvecs[:, 1:3], dtype=float)
+        coords -= np.mean(coords, axis=0, keepdims=True)
+        scale = np.max(np.linalg.norm(coords, axis=1))
+        if scale > 0.0:
+            coords /= scale
+
+        angles = np.arctan2(coords[:, 1], coords[:, 0])
+        order = np.argsort(angles)
+        return coords, order
+
+    def _gradient_template_img_and_data(self):
+        results = self._last_gradients or {}
+        template_img = self._active_parcellation_img
+        template_data = self._active_parcellation_data
+        template_path_raw = str(results.get("template_path") or "").strip()
+        if template_path_raw:
+            template_path = Path(template_path_raw)
+            active_path = Path(self._active_parcellation_path) if self._active_parcellation_path is not None else None
+            if template_img is None or active_path != template_path:
+                try:
+                    import nibabel as nib
+
+                    template_img = nib.load(str(template_path))
+                    template_data = np.asarray(template_img.get_fdata(), dtype=int)
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to load parcellation template: {exc}") from exc
+        if template_img is None:
+            raise RuntimeError("No parcellation template available.")
+        if template_data is None:
+            try:
+                template_data = np.asarray(template_img.get_fdata(), dtype=int)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to read parcellation template data: {exc}") from exc
+        template_data = np.asarray(template_data, dtype=int)
+        if template_data.ndim != 3:
+            raise RuntimeError("Parcellation template must be a 3D image.")
+        return template_img, template_data
+
+    def _gradient_spatial_embedding(self):
+        results = self._last_gradients or {}
+        if not results:
+            raise RuntimeError("No gradients available for spatial classification.")
+
+        try:
+            projection_labels = np.asarray(results.get("projection_labels"), dtype=int).reshape(-1)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid projection labels for spatial classification: {exc}") from exc
+        if projection_labels.size == 0:
+            raise RuntimeError("No projection labels available for spatial classification.")
+
+        cached = results.get("spatial_embedding")
+        if isinstance(cached, dict):
+            cached_labels = np.asarray(cached.get("projection_labels", []), dtype=int).reshape(-1)
+            coords = np.asarray(cached.get("coords"), dtype=float)
+            if (
+                cached_labels.shape == projection_labels.shape
+                and np.array_equal(cached_labels, projection_labels)
+                and coords.shape == (projection_labels.size, 2)
+            ):
+                return cached
+
+        try:
+            from scipy.spatial.distance import cdist
+        except Exception as exc:
+            raise RuntimeError(f"scipy distance tools are unavailable: {exc}") from exc
+
+        template_img, template_data = self._gradient_template_img_and_data()
+        try:
+            # Spatial distances should be measured in affine/world space, not voxel index space.
+            centroids_world = np.asarray(
+                nettools.compute_centroids(
+                    template_img,
+                    labels=np.asarray(projection_labels, dtype=int),
+                    world=True,
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to compute world-space parcel centroids: {exc}") from exc
+        if centroids_world.shape[0] != projection_labels.shape[0]:
+            raise RuntimeError("Spatial centroid count does not match the projected parcels.")
+
+        distance_matrix = np.asarray(cdist(centroids_world, centroids_world, metric="euclidean"), dtype=float)
+        positive_distances = distance_matrix[distance_matrix > 0]
+        if positive_distances.size == 0:
+            raise RuntimeError("Spatial centroid distances are degenerate.")
+        sigma = float(np.median(positive_distances))
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            sigma = float(np.mean(positive_distances))
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            sigma = 1.0
+        # The spectral helper expects an affinity-like matrix. Raw distances collapse badly here.
+        affinity_matrix = np.exp(-np.square(distance_matrix) / (2.0 * sigma * sigma))
+        np.fill_diagonal(affinity_matrix, 0.0)
+        coords, order = self._compute_spectral_coords_and_order(affinity_matrix)
+
+        try:
+            projected_x = np.asarray(
+                nettools.project_to_3dspace(coords[:, 0], template_data, projection_labels),
+                dtype=np.float32,
+            )
+            projected_y = np.asarray(
+                nettools.project_to_3dspace(coords[:, 1], template_data, projection_labels),
+                dtype=np.float32,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to project spatial spectral coordinates: {exc}") from exc
+
+        cached = {
+            "projection_labels": np.asarray(projection_labels, dtype=int),
+            "centroids_world": centroids_world,
+            "distance_matrix": distance_matrix,
+            "affinity_matrix": affinity_matrix,
+            "coords": np.asarray(coords, dtype=float),
+            "order": np.asarray(order, dtype=int),
+            "projected_x": projected_x,
+            "projected_y": projected_y,
+        }
+        results["spatial_embedding"] = cached
+        return cached
+
+    def _classification_axis_payload(
+        self,
+        axis_key: str,
+        gradients,
+        projected_data,
+        *,
+        spatial_index: int = 0,
+        spatial_label: str = "Spatial",
+    ):
+        axis = self._normalize_gradient_classification_axis(axis_key, default="gradient1")
+        if axis == "gradient1":
+            if gradients.ndim != 2 or gradients.shape[1] < 1:
+                raise RuntimeError("Gradient 1 is not available for classification.")
+            if projected_data.ndim == 4:
+                volume = np.asarray(projected_data[..., 0], dtype=float)
+            else:
+                volume = np.asarray(projected_data, dtype=float)
+            return np.asarray(gradients[:, 0], dtype=float), volume, "Gradient 1"
+        if axis == "gradient2":
+            if gradients.ndim != 2 or gradients.shape[1] < 2:
+                raise RuntimeError("Gradient 2 is not available for classification.")
+            if projected_data.ndim != 4 or projected_data.shape[3] < 2:
+                raise RuntimeError("Projected Gradient 2 volume is not available.")
+            return np.asarray(gradients[:, 1], dtype=float), np.asarray(projected_data[..., 1], dtype=float), "Gradient 2"
+
+        spatial = self._gradient_spatial_embedding()
+        coord_index = max(0, min(int(spatial_index), 1))
+        volume_key = "projected_x" if coord_index == 0 else "projected_y"
+        return (
+            np.asarray(spatial["coords"][:, coord_index], dtype=float),
+            np.asarray(spatial[volume_key], dtype=float),
+            str(spatial_label or ("Spatial 1" if coord_index == 0 else "Spatial 2")),
+        )
+
     def _render_gradients_3d(self) -> None:
         if not self._last_gradients:
             self.statusBar().showMessage("No gradients computed yet.")
             return
         projected_data = self._last_gradients.get("projected_data")
         if projected_data is None:
-            self.statusBar().showMessage("No projected 3D data available. Compute gradients again.")
+            self.statusBar().showMessage("No projected fsaverage data available. Compute gradients again.")
             return
         try:
-            from window.plot_msmode import MSModeSurfaceDialog
+            from window.plot_gradient import GradientSurfaceDialog
         except Exception:
             try:
-                from mrsi_viewer.window.plot_msmode import MSModeSurfaceDialog
+                from mrsi_viewer.window.plot_gradient import GradientSurfaceDialog
             except Exception as exc:
-                self.statusBar().showMessage(f"Nilearn surface viewer unavailable: {exc}")
+                self.statusBar().showMessage(f"Gradient surface viewer unavailable: {exc}")
                 return
         try:
             n_grad = int(self._last_gradients.get("n_grad", 1))
             source_name = self._last_gradients.get("source_name", "matrix")
             cmap_name = self._selected_surface_colormap_name()
-            title = f"Diffusion components ({n_grad}) - {source_name}"
-            self._surface_dialog = MSModeSurfaceDialog.from_array(
+            cmap = self._selected_surface_colormap()
+            hemisphere_mode = self._selected_gradient_hemisphere_mode()
+            surface_mesh = self._selected_gradient_surface_mesh()
+            title = f"Gradient components ({n_grad}) - {source_name}"
+            self._surface_dialog = GradientSurfaceDialog.from_array(
                 projected_data,
                 affine=self._last_gradients.get("affine"),
                 title=title,
-                cmap=self._selected_surface_colormap(),
+                cmap=cmap,
                 cmap_name=cmap_name,
                 theme_name=self._theme_name,
+                hemisphere_mode=hemisphere_mode,
+                fsaverage_mesh=surface_mesh,
                 parent=self,
             )
             screen = QApplication.primaryScreen()
@@ -5178,9 +7003,872 @@ class ConnectomeViewer(QMainWindow):
             self._surface_dialog.resize(width, height)
             self._surface_dialog.show()
         except Exception as exc:
-            self.statusBar().showMessage(f"Failed to render 3D surfaces: {exc}")
+            self.statusBar().showMessage(f"Failed to render Gradient fsaverage surfaces: {exc}")
             return
-        self.statusBar().showMessage("Opened Nilearn 3D surface viewer.")
+        self.statusBar().showMessage("Opened Gradient fsaverage viewer.")
+
+    def _classify_gradients_fsaverage(self) -> None:
+        if not self._last_gradients:
+            self.statusBar().showMessage("No gradients computed yet.")
+            return
+
+        projected_data = self._last_gradients.get("projected_data")
+        if projected_data is None:
+            self.statusBar().showMessage("No projected fsaverage data available. Compute gradients again.")
+            return
+
+        gradients = np.asarray(self._last_gradients.get("gradients"), dtype=float)
+        keep_indices = np.asarray(self._last_gradients.get("keep_indices"), dtype=int)
+        if gradients.ndim != 2 or gradients.shape[1] < 1:
+            self.statusBar().showMessage("No gradient components are available for classification.")
+            return
+        if keep_indices.size == 0:
+            self.statusBar().showMessage("No node mapping available for classification.")
+            return
+
+        if np.any((keep_indices < 0) | (keep_indices >= gradients.shape[0])):
+            self.statusBar().showMessage("Classification indices are out of range. Compute gradients again.")
+            return
+        if not self._can_classify_gradients():
+            self.statusBar().showMessage("The selected classification axes are not available for the current gradients.")
+            return
+
+        try:
+            from window.plot_gradient import GradientClassificationDialog, GradientScatterDialog
+        except Exception:
+            try:
+                from mrsi_viewer.window.plot_gradient import GradientClassificationDialog, GradientScatterDialog
+            except Exception as exc:
+                self.statusBar().showMessage(f"Gradient classification viewer unavailable: {exc}")
+                return
+
+        try:
+            source_name = self._last_gradients.get("source_name", "matrix")
+            hemisphere_mode = self._selected_gradient_classification_hemisphere_mode()
+            surface_mesh = self._selected_gradient_classification_surface_mesh()
+            scatter_rotation = self._selected_gradient_scatter_rotation()
+            use_triangular_rgb = self._selected_gradient_triangular_rgb()
+            classification_fit_mode = self._selected_gradient_classification_fit_mode()
+            triangular_color_order = self._selected_gradient_triangular_color_order()
+            x_axis = self._selected_gradient_classification_x_axis()
+            y_axis = self._selected_gradient_classification_y_axis()
+            both_spatial = x_axis == "spatial" and y_axis == "spatial"
+            x_spatial_index = 0
+            y_spatial_index = 1 if both_spatial else 0
+            x_spatial_label = "Spatial 1" if both_spatial else "Spatial"
+            y_spatial_label = "Spatial 2" if both_spatial else "Spatial"
+            class_component = int(
+                self._normalize_gradient_classification_component(
+                    self._selected_gradient_classification_component(),
+                    max_components=gradients.shape[1],
+                )
+            ) - 1
+            class_component = max(0, min(class_component, gradients.shape[1] - 1))
+            classification_cmap_name = self._selected_gradient_classification_colormap()
+            classification_cmap = self._selected_surface_colormap(classification_cmap_name)
+            axis_gradients = np.asarray(gradients[keep_indices, :], dtype=float)
+            x_values, x_volume, x_label = self._classification_axis_payload(
+                x_axis,
+                axis_gradients,
+                projected_data,
+                spatial_index=x_spatial_index,
+                spatial_label=x_spatial_label,
+            )
+            y_values, y_volume, y_label = self._classification_axis_payload(
+                y_axis,
+                axis_gradients,
+                projected_data,
+                spatial_index=y_spatial_index,
+                spatial_label=y_spatial_label,
+            )
+            class_component_values = np.asarray(axis_gradients[:, class_component], dtype=float)
+            finite_mask = np.isfinite(x_values) & np.isfinite(y_values) & np.isfinite(class_component_values)
+            if not np.any(finite_mask):
+                self.statusBar().showMessage(f"No finite values available for {y_label} vs {x_label} classification.")
+                return
+            projection_labels = np.asarray(self._last_gradients.get("projection_labels"), dtype=int).reshape(-1)
+            if projection_labels.shape[0] != x_values.shape[0]:
+                self.statusBar().showMessage(
+                    "Classification labels are out of sync with the projected nodes. Compute gradients again."
+                )
+                return
+            finite_mask &= self._gradient_projection_hemisphere_mask(
+                hemisphere_mode,
+                projection_labels,
+            )
+            if not np.any(finite_mask):
+                self.statusBar().showMessage(
+                    f"No {hemisphere_mode.upper()} parcels are available for {y_label} vs {x_label} classification."
+                )
+                return
+            parcel_names = _to_string_list(self._last_gradients.get("parcel_names"))
+            point_labels = []
+            for idx, label in enumerate(projection_labels.tolist()):
+                label_text = ""
+                if parcel_names and idx < len(parcel_names):
+                    label_text = str(parcel_names[idx] or "").strip()
+                if not label_text:
+                    label_text = f"Parcel {int(label)}"
+                point_labels.append(label_text)
+            point_labels = np.asarray(point_labels, dtype=object)
+            scatter_title = f"{y_label} vs {x_label} - {source_name}"
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to prepare classification axes: {exc}")
+            return
+
+        edge_pairs = np.zeros((0, 2), dtype=int)
+        adjacency_note = None
+        try:
+            edge_pairs, adjacency_note = self._classification_scatter_edge_pairs(
+                projection_labels,
+                finite_mask,
+            )
+        except Exception as exc:
+            adjacency_note = f"Adjacency skipped: {exc}"
+
+        scatter_error = None
+        surface_error = None
+        try:
+            scatter_projection_labels = np.asarray(projection_labels[finite_mask], dtype=int)
+            scatter_point_labels = np.asarray(point_labels[finite_mask], dtype=object)
+            scatter_hemisphere_codes = np.asarray(
+                self._gradient_projection_hemisphere_codes()[finite_mask],
+                dtype=int,
+            )
+
+            def _project_paths_callback(payload):
+                self._project_classification_paths_to_brain(
+                    payload,
+                    scatter_projection_labels,
+                    scatter_point_labels,
+                    hemisphere_mode=hemisphere_mode,
+                    source_name=source_name,
+                    x_label=x_label,
+                    y_label=y_label,
+                )
+
+            self._gradient_scatter_dialog = GradientScatterDialog(
+                x_values[finite_mask],
+                y_values[finite_mask],
+                color_values=class_component_values[finite_mask],
+                point_labels=point_labels[finite_mask],
+                point_ids=scatter_projection_labels,
+                title=scatter_title,
+                x_label=x_label,
+                y_label=y_label,
+                color_label=f"Gradient {class_component + 1}",
+                cmap=classification_cmap,
+                cmap_name=classification_cmap_name,
+                theme_name=self._theme_name,
+                rotation_preset=scatter_rotation,
+                use_triangular_rgb=use_triangular_rgb,
+                rgb_fit_mode=classification_fit_mode,
+                triangular_color_order=triangular_color_order,
+                edge_pairs=edge_pairs,
+                point_group_codes=scatter_hemisphere_codes,
+                project_paths_callback=_project_paths_callback,
+                parent=self,
+            )
+            self._gradient_scatter_dialog.resize(860, 760)
+            self._gradient_scatter_dialog.show()
+        except Exception as exc:
+            scatter_error = str(exc)
+
+        try:
+            if use_triangular_rgb:
+                self._gradient_classification_dialog = GradientClassificationDialog.from_array(
+                    x_volume,
+                    y_volume,
+                    affine=self._last_gradients.get("affine"),
+                    x_values=x_values[finite_mask],
+                    y_values=y_values[finite_mask],
+                    support_mask_data=self._last_gradients.get("support_mask"),
+                    title=f"{y_label} vs {x_label} Classification - {source_name}",
+                    x_label=x_label,
+                    y_label=y_label,
+                    theme_name=self._theme_name,
+                    hemisphere_mode=hemisphere_mode,
+                    fsaverage_mesh=surface_mesh,
+                    rotation_preset=scatter_rotation,
+                    rgb_fit_mode=classification_fit_mode,
+                    triangular_color_order=triangular_color_order,
+                    parent=self,
+                )
+            else:
+                if projected_data.ndim == 4:
+                    classification_projection = np.asarray(projected_data[..., class_component], dtype=float)
+                else:
+                    classification_projection = np.asarray(projected_data, dtype=float)
+                self._gradient_classification_dialog = GradientSurfaceDialog.from_array(
+                    classification_projection,
+                    affine=self._last_gradients.get("affine"),
+                    title=f"Gradient {class_component + 1} Classification - {source_name}",
+                    cmap=classification_cmap,
+                    cmap_name=classification_cmap_name,
+                    theme_name=self._theme_name,
+                    hemisphere_mode=hemisphere_mode,
+                    fsaverage_mesh=surface_mesh,
+                    parent=self,
+                )
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                geom = screen.availableGeometry()
+                width = max(int(geom.width() * 0.9), 1200)
+                height = min(max(int(geom.height() * 0.82), 760), int(geom.height() * 0.95))
+            else:
+                width = 1500
+                height = 900
+            self._gradient_classification_dialog.resize(width, height)
+            self._gradient_classification_dialog.show()
+        except Exception as exc:
+            surface_error = str(exc)
+
+        adjacency_suffix = ""
+        if adjacency_note:
+            note_text = str(adjacency_note).strip()
+            if note_text:
+                if note_text[-1] not in ".!?":
+                    note_text += "."
+                adjacency_suffix = f" {note_text}"
+
+        if scatter_error and surface_error:
+            self.statusBar().showMessage(
+                f"Failed to open classification scatter and fsaverage windows: {scatter_error}; {surface_error}{adjacency_suffix}"
+            )
+            return
+        if scatter_error:
+            self.statusBar().showMessage(
+                f"Opened classified fsaverage viewer, but the scatter window failed: {scatter_error}{adjacency_suffix}"
+            )
+            return
+        if surface_error:
+            self.statusBar().showMessage(
+                f"Opened classification scatter, but the fsaverage window failed: {surface_error}{adjacency_suffix}"
+            )
+            return
+        if use_triangular_rgb:
+            self.statusBar().showMessage(
+                f"Opened classification scatter and fsaverage viewers.{adjacency_suffix}"
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Opened classification scatter and fsaverage viewers using Gradient {class_component + 1}.{adjacency_suffix}"
+            )
+
+    def _project_classification_paths_to_brain(
+        self,
+        payload,
+        scatter_projection_labels,
+        scatter_point_labels,
+        *,
+        hemisphere_mode="both",
+        source_name="matrix",
+        x_label="Gradient 2",
+        y_label="Gradient 1",
+    ) -> None:
+        project_payload = dict(payload or {})
+        group_payloads = [
+            dict(group_payload)
+            for group_payload in list(project_payload.get("group_paths", []))
+            if (
+                len(list(dict(group_payload).get("optimal_full_path", []))) >= 2
+                or len(list(dict(group_payload).get("subc_optimal_path", []))) >= 2
+            )
+        ]
+        optimal_full_path = [int(node) for node in list(project_payload.get("optimal_full_path", []))]
+        if (
+            not group_payloads
+            and len(optimal_full_path) < 2
+            and not any(len(list(dict(group).get("subc_optimal_path", []))) >= 2 for group in list(project_payload.get("group_paths", [])))
+        ):
+            self.statusBar().showMessage("No complete ordered path is available at the current slider radius.")
+            return
+
+        scatter_projection_labels = np.asarray(scatter_projection_labels, dtype=int).reshape(-1)
+        scatter_point_labels = np.asarray(scatter_point_labels, dtype=object).reshape(-1)
+        if scatter_projection_labels.size == 0:
+            self.statusBar().showMessage("No classification parcels are available for 3D path projection.")
+            return
+
+        if np.any((np.asarray(optimal_full_path, dtype=int) < 0) | (np.asarray(optimal_full_path, dtype=int) >= scatter_projection_labels.size)):
+            self.statusBar().showMessage("The selected scatter path is out of range for the current parcels.")
+            return
+
+        try:
+            template_img, template_data = self._gradient_template_img_and_data()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to load the parcellation template for 3D projection: {exc}")
+            return
+
+        try:
+            from dipy.viz import window
+            from mrsitoolbox.graphplot.netplot import NetPlot
+        except Exception as exc:
+            self.statusBar().showMessage(f"Fury path viewer unavailable: {exc}")
+            return
+
+        try:
+            centroids_mni = np.asarray(
+                nettools.compute_centroids(
+                    template_img,
+                    labels=np.asarray(scatter_projection_labels, dtype=int),
+                    world=False,
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to compute parcel centroids for 3D projection: {exc}")
+            return
+
+        if centroids_mni.shape != (scatter_projection_labels.size, 3):
+            self.statusBar().showMessage("Centroid count mismatch for 3D path projection.")
+            return
+
+        point_colors = np.asarray(project_payload.get("point_colors", []), dtype=float)
+        if point_colors.shape != (scatter_projection_labels.size, 3):
+            point_colors = np.full((scatter_projection_labels.size, 3), 0.35, dtype=float)
+
+        def _path_coords(path_nodes):
+            node_indices = np.asarray([int(node) for node in list(path_nodes or [])], dtype=int)
+            if node_indices.size < 2:
+                return None
+            if np.any((node_indices < 0) | (node_indices >= centroids_mni.shape[0])):
+                return None
+            coords = np.asarray(centroids_mni[node_indices, :], dtype=float)
+            if coords.ndim != 2 or coords.shape[1] != 3:
+                return None
+            if not np.all(np.isfinite(coords)):
+                return None
+            return coords
+
+        def _rgb_basis_color(channel):
+            mapping = {
+                "R": np.asarray((1.0, 0.0, 0.0), dtype=float),
+                "G": np.asarray((0.0, 1.0, 0.0), dtype=float),
+                "B": np.asarray((0.0, 0.0, 1.0), dtype=float),
+            }
+            return np.asarray(mapping.get(str(channel).strip().upper(), (0.5, 0.5, 0.5)), dtype=float)
+
+        channel_order = [
+            str(channel)
+            for channel in str(project_payload.get("channel_order", "")).strip()
+        ]
+        energy_scaling = dict(project_payload.get("energy_width_scaling", {}))
+        try:
+            base_edge_width = max(0.05, float(project_payload.get("edge_linewidth", 0.45)))
+        except Exception:
+            base_edge_width = 0.45
+        width_mode = str(project_payload.get("width_scaling_mode", "exp")).strip().lower()
+        if width_mode not in {"exp", "linear", "log"}:
+            width_mode = "exp"
+        try:
+            width_strength = max(0.05, float(project_payload.get("width_scaling_strength", 2.0)))
+        except Exception:
+            width_strength = 2.0
+
+        def _path_width_from_energy(energy, family_type):
+            scaling_value = energy_scaling.get(str(family_type), {})
+            scaling = dict(scaling_value) if isinstance(scaling_value, dict) else {}
+            default_width = max(1.2, base_edge_width * 6.0)
+            if not scaling:
+                return default_width
+            try:
+                energy_value = float(energy)
+                emin = float(scaling.get("min"))
+                emax = float(scaling.get("max"))
+            except Exception:
+                return default_width
+            if not np.isfinite(energy_value) or not np.isfinite(emin) or not np.isfinite(emax):
+                return default_width
+            if np.isclose(emax, emin):
+                norm = 0.5
+            else:
+                norm = float(np.clip((energy_value - emin) / (emax - emin), 0.0, 1.0))
+            if width_mode == "linear":
+                mapped = norm
+            elif width_mode == "log":
+                mapped = float(np.log1p(width_strength * norm) / np.log1p(width_strength))
+            else:
+                denominator = float(np.expm1(width_strength))
+                if np.isclose(denominator, 0.0):
+                    mapped = norm
+                else:
+                    mapped = float(np.expm1(width_strength * norm) / denominator)
+            return max(default_width * 0.7, base_edge_width * (4.5 + 4.5 * mapped))
+
+        def _lookup_path_energy(group_payload, family_key, path_nodes, fallback_key=None):
+            nodes_key = tuple(int(node) for node in list(path_nodes or []))
+            if len(nodes_key) < 2:
+                return None
+            candidate_paths = list(group_payload.get(family_key, []))
+            candidate_energies = np.asarray(
+                group_payload.get(
+                    "ctx_path_energies" if family_key == "all_full_paths" else "subc_path_energies",
+                    [],
+                ),
+                dtype=float,
+            ).reshape(-1)
+            for idx, candidate in enumerate(candidate_paths):
+                candidate_key = tuple(int(node) for node in list(candidate or []))
+                if candidate_key == nodes_key and idx < candidate_energies.size and np.isfinite(candidate_energies[idx]):
+                    return float(candidate_energies[idx])
+            if fallback_key is not None:
+                try:
+                    fallback = group_payload.get(fallback_key)
+                    if fallback is not None and np.isfinite(float(fallback)):
+                        return float(fallback)
+                except Exception:
+                    return None
+            return None
+
+        def _ctx_segment_records(group_payload, full_path_nodes):
+            nodes = [int(node) for node in list(full_path_nodes or [])]
+            anchors = {str(key): int(value) for key, value in dict(group_payload.get("anchors", {})).items()}
+            order = [str(channel) for channel in channel_order if str(channel) in anchors]
+            if len(nodes) < 2 or len(order) < 2:
+                return []
+
+            def _record(first, second, segment_nodes):
+                color = np.clip(
+                    0.5 * (_rgb_basis_color(first) + _rgb_basis_color(second)),
+                    0.0,
+                    1.0,
+                )
+                return {
+                    "nodes": [int(node) for node in list(segment_nodes or [])],
+                    "color": color,
+                }
+
+            if len(order) == 2:
+                return [_record(order[0], order[1], nodes)]
+
+            middle_anchor = int(anchors[order[1]])
+            try:
+                split_index = next(
+                    idx
+                    for idx, node in enumerate(nodes)
+                    if int(node) == middle_anchor and 0 < idx < len(nodes) - 1
+                )
+            except StopIteration:
+                return [_record(order[0], order[-1], nodes)]
+            return [
+                _record(order[0], order[1], nodes[: split_index + 1]),
+                _record(order[1], order[2], nodes[split_index:]),
+            ]
+
+        draw_paths = []
+        draw_colors = []
+        draw_widths = []
+        if not group_payloads and len(optimal_full_path) >= 2:
+            group_payloads = [project_payload]
+
+        anchor_channels = ("R", "G", "B")
+        anchor_centroids = []
+        anchor_node_colors = []
+        anchor_node_labels = []
+        seen_anchor_indices = set()
+        union_nodes = set()
+        show_all_paths = bool(project_payload.get("show_all_ordered_paths"))
+        for group_payload in group_payloads:
+            seen_paths = set()
+            ctx_paths = (
+                list(group_payload.get("all_full_paths", []))
+                if show_all_paths
+                else [group_payload.get("optimal_full_path", [])]
+            )
+            for path_nodes in ctx_paths:
+                nodes = tuple(int(node) for node in list(path_nodes or []))
+                if len(nodes) < 2:
+                    continue
+                width = _lookup_path_energy(
+                    group_payload,
+                    "all_full_paths",
+                    nodes,
+                    fallback_key="ctx_optimal_path_energy",
+                )
+                path_width = _path_width_from_energy(width, "ctx")
+                for record in _ctx_segment_records(group_payload, nodes):
+                    segment_nodes = tuple(int(node) for node in list(record.get("nodes", [])))
+                    if len(segment_nodes) < 2:
+                        continue
+                    coords = _path_coords(segment_nodes)
+                    if coords is None:
+                        continue
+                    seen_paths.add(segment_nodes)
+                    draw_paths.append(coords)
+                    draw_colors.append(np.asarray(record.get("color", (0.0, 0.0, 0.0)), dtype=float).reshape(3))
+                    draw_widths.append(path_width)
+                union_nodes.update(int(node) for node in nodes)
+
+            subc_color = np.asarray(group_payload.get("subc_color", (0.0, 0.0, 0.0)), dtype=float).reshape(-1)
+            if subc_color.shape != (3,):
+                subc_color = np.asarray((0.0, 0.0, 0.0), dtype=float)
+            subc_paths = list(group_payload.get("subc_paths", [])) if show_all_paths else [group_payload.get("subc_optimal_path", [])]
+            for path_nodes in subc_paths:
+                nodes = tuple(int(node) for node in list(path_nodes or []))
+                if len(nodes) < 2 or nodes in seen_paths:
+                    continue
+                coords = _path_coords(nodes)
+                if coords is None:
+                    continue
+                seen_paths.add(nodes)
+                draw_paths.append(coords)
+                draw_colors.append(np.asarray(subc_color, dtype=float))
+                draw_widths.append(
+                    _path_width_from_energy(
+                        _lookup_path_energy(
+                            group_payload,
+                            "subc_paths",
+                            nodes,
+                            fallback_key="subc_optimal_path_energy",
+                        ),
+                        "subc",
+                    )
+                )
+                union_nodes.update(int(node) for node in nodes)
+
+            anchors = dict(group_payload.get("anchors", {}))
+            for channel in anchor_channels:
+                anchor_idx = anchors.get(channel)
+                if anchor_idx is None:
+                    continue
+                anchor_idx = int(anchor_idx)
+                if anchor_idx in seen_anchor_indices or not (0 <= anchor_idx < centroids_mni.shape[0]):
+                    continue
+                seen_anchor_indices.add(anchor_idx)
+                anchor_centroids.append(centroids_mni[anchor_idx])
+                if anchor_idx < point_colors.shape[0]:
+                    anchor_node_colors.append(point_colors[anchor_idx])
+                else:
+                    anchor_node_colors.append((0.0, 0.0, 0.0))
+                label_text = str(scatter_point_labels[anchor_idx]).strip() if anchor_idx < scatter_point_labels.shape[0] else ""
+                anchor_node_labels.append(label_text or f"Parcel {int(scatter_projection_labels[anchor_idx])}")
+            subc_anchor = group_payload.get("subc_anchor")
+            if subc_anchor is not None:
+                subc_anchor = int(subc_anchor)
+                if subc_anchor not in seen_anchor_indices and 0 <= subc_anchor < centroids_mni.shape[0]:
+                    seen_anchor_indices.add(subc_anchor)
+                    anchor_centroids.append(centroids_mni[subc_anchor])
+                    if subc_anchor < point_colors.shape[0]:
+                        anchor_node_colors.append(point_colors[subc_anchor])
+                    else:
+                        anchor_node_colors.append((0.0, 0.0, 0.0))
+                    label_text = str(scatter_point_labels[subc_anchor]).strip() if subc_anchor < scatter_point_labels.shape[0] else ""
+                    anchor_node_labels.append(label_text or f"Parcel {int(scatter_projection_labels[subc_anchor])}")
+
+        if not draw_paths:
+            self.statusBar().showMessage("The selected ordered path cannot be projected to the 3D brain.")
+            return
+
+        path_node_indices = np.asarray(sorted(int(node) for node in union_nodes), dtype=int)
+        if path_node_indices.size:
+            path_node_indices = path_node_indices[
+                (path_node_indices >= 0) & (path_node_indices < centroids_mni.shape[0])
+            ]
+        nonpath_mask = np.ones(centroids_mni.shape[0], dtype=bool)
+        if path_node_indices.size:
+            nonpath_mask[path_node_indices] = False
+        nonpath_indices = np.flatnonzero(nonpath_mask)
+
+        try:
+            netplot = NetPlot(window)
+            netplot.scene.background((1, 1, 1))
+            brain_hemi = None if self._normalize_gradient_hemisphere_mode(hemisphere_mode) == "both" else hemisphere_mode
+            netplot.add_brain(
+                netplot.mni_template,
+                hemisphere=brain_hemi,
+                label_image=np.asarray(template_data, dtype=int),
+                parcel_labels_list=None,
+                opacity=0.12,
+            )
+            if nonpath_indices.size:
+                netplot.add_nodes(
+                    centroids_mni[nonpath_indices, :],
+                    node_radius=0.95,
+                    node_color=np.tile(np.asarray([[0.6, 0.6, 0.6]], dtype=float), (nonpath_indices.size, 1)),
+                    node_labels=None,
+                    node_opacity=0.22,
+                )
+            if path_node_indices.size:
+                netplot.add_nodes(
+                    centroids_mni[path_node_indices, :],
+                    node_radius=1.15,
+                    node_color=np.asarray(point_colors[path_node_indices, :], dtype=float),
+                    node_labels=None,
+                    node_opacity=0.95,
+                )
+            netplot.add_paths(
+                draw_paths,
+                path_color=np.asarray(draw_colors, dtype=float),
+                path_width=np.asarray(draw_widths, dtype=float),
+                path_opacity=1.0,
+            )
+            if anchor_centroids:
+                netplot.add_nodes(
+                    np.asarray(anchor_centroids, dtype=float),
+                    node_radius=2.3,
+                    node_color=np.asarray(anchor_node_colors, dtype=float),
+                    node_labels=anchor_node_labels,
+                )
+            window.show(netplot.scene)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to project the selected path set to the 3D brain: {exc}")
+            return
+
+        path_label = " -> ".join(list(project_payload.get("channel_order", "RBG")))
+        self.statusBar().showMessage(
+            f"Opened 3D path projection for {path_label} on {source_name} ({y_label} vs {x_label})."
+        )
+
+    @staticmethod
+    def _gradient_rotation_angles(preset: str):
+        mapping = {
+            "Default": (0.0, 0.0, 0.0),
+            "X +90": (90.0, 0.0, 0.0),
+            "X -90": (-90.0, 0.0, 0.0),
+            "Y +90": (0.0, 90.0, 0.0),
+            "Y -90": (0.0, -90.0, 0.0),
+            "Y 180": (0.0, 180.0, 0.0),
+            "Z +90": (0.0, 0.0, 90.0),
+            "Z -90": (0.0, 0.0, -90.0),
+        }
+        return mapping.get(str(preset or "Default"), (0.0, 0.0, 0.0))
+
+    @staticmethod
+    def _actor_bounds_center(actor_obj):
+        bounds = actor_obj.GetBounds() if actor_obj is not None else None
+        if not bounds or len(bounds) != 6:
+            return None
+        if not np.all(np.isfinite(bounds)):
+            return None
+        return (
+            float((bounds[0] + bounds[1]) * 0.5),
+            float((bounds[2] + bounds[3]) * 0.5),
+            float((bounds[4] + bounds[5]) * 0.5),
+        )
+
+    def _apply_gradient_component_rotation(self, actors, preset: str, fallback_center) -> None:
+        rx, ry, rz = self._gradient_rotation_angles(preset)
+        if np.isclose(rx, 0.0) and np.isclose(ry, 0.0) and np.isclose(rz, 0.0):
+            return
+        origin = None
+        for actor_obj in actors:
+            origin = self._actor_bounds_center(actor_obj)
+            if origin is not None:
+                break
+        if origin is None:
+            center = np.asarray(fallback_center, dtype=float).reshape(3)
+            origin = (float(center[0]), float(center[1]), float(center[2]))
+        for actor_obj in actors:
+            if actor_obj is None:
+                continue
+            actor_obj.SetOrigin(*origin)
+            if not np.isclose(rx, 0.0):
+                actor_obj.RotateX(rx)
+            if not np.isclose(ry, 0.0):
+                actor_obj.RotateY(ry)
+            if not np.isclose(rz, 0.0):
+                actor_obj.RotateZ(rz)
+
+    def _render_gradients_network(self) -> None:
+        if not self._last_gradients:
+            self.statusBar().showMessage("No gradients computed yet.")
+            return
+
+        gradients = np.asarray(self._last_gradients.get("gradients"), dtype=float)
+        keep_indices = np.asarray(self._last_gradients.get("keep_indices"), dtype=int)
+        projection_labels = np.asarray(self._last_gradients.get("projection_labels"), dtype=int)
+        if gradients.ndim != 2 or keep_indices.size == 0 or projection_labels.size == 0:
+            self.statusBar().showMessage("Gradient node data unavailable. Compute gradients again.")
+            return
+        if keep_indices.ndim != 1 or projection_labels.ndim != 1 or keep_indices.size != projection_labels.size:
+            self.statusBar().showMessage("Gradient node mapping is invalid. Compute gradients again.")
+            return
+        if np.max(keep_indices) >= gradients.shape[0]:
+            self.statusBar().showMessage("Gradient node indices are out of range. Compute gradients again.")
+            return
+
+        template_path_raw = str(self._last_gradients.get("template_path") or "").strip()
+        template_img = self._active_parcellation_img
+        if template_path_raw:
+            template_path = Path(template_path_raw)
+            if self._active_parcellation_path is None or Path(self._active_parcellation_path) != template_path:
+                try:
+                    import nibabel as nib
+
+                    template_img = nib.load(str(template_path))
+                except Exception as exc:
+                    self.statusBar().showMessage(f"Failed to load parcellation for network render: {exc}")
+                    return
+        if template_img is None:
+            self.statusBar().showMessage("No parcellation available for network render.")
+            return
+
+        try:
+            from dipy.viz import window, actor
+            from mrsitoolbox.graphplot.netplot import NetPlot
+        except Exception as exc:
+            self.statusBar().showMessage(f"Fury network viewer unavailable: {exc}")
+            return
+
+        try:
+            centroids_mni = np.asarray(
+                nettools.compute_centroids(
+                    template_img,
+                    labels=projection_labels.astype(int),
+                    world=False,
+                ),
+                dtype=float,
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to compute parcel centroids: {exc}")
+            return
+
+        if centroids_mni.shape[0] != projection_labels.shape[0]:
+            self.statusBar().showMessage("Centroid count mismatch for network render.")
+            return
+
+        cmap = self._selected_surface_colormap()
+        if not callable(cmap):
+            try:
+                import matplotlib.cm as mpl_cm
+
+                cmap = mpl_cm.get_cmap(str(cmap))
+            except Exception as exc:
+                self.statusBar().showMessage(f"Invalid colormap for network render: {exc}")
+                return
+        n_grad = int(self._last_gradients.get("n_grad", gradients.shape[1] if gradients.ndim == 2 else 1))
+        source_name = str(self._last_gradients.get("source_name", "matrix"))
+        hemisphere_mode = self._selected_gradient_hemisphere_mode()
+        rotation_presets = self._current_gradient_rotation_presets()
+        selected_component = self._normalize_gradient_network_component(
+            self._selected_gradient_network_component(),
+            max_components=n_grad,
+        )
+        if selected_component == "all":
+            component_indices = list(range(n_grad))
+        else:
+            component_indices = [int(selected_component) - 1]
+        opened_components = []
+        netplot = NetPlot(window)
+        netplot.scene.background((1, 1, 1))
+        template_shape = tuple(int(v) for v in np.asarray(netplot.mni_template.shape[:3], dtype=int))
+        n_panels = max(1, len(component_indices))
+        n_cols = max(1, min(3, n_panels))
+        n_rows = max(1, int(math.ceil(n_panels / n_cols)))
+        x_step = float(template_shape[0] + 36)
+        y_step = float(template_shape[1] + 48)
+        title_z = float(template_shape[2] * 0.5)
+        hemisphere_mask = self._gradient_projection_hemisphere_mask(
+            hemisphere_mode,
+            projection_labels,
+        )
+        brain_hemi = None if hemisphere_mode == "both" else hemisphere_mode
+
+        for panel_idx, comp_idx in enumerate(component_indices):
+            component_values = np.asarray(gradients[keep_indices, comp_idx], dtype=float)
+            finite_mask = (
+                np.isfinite(component_values)
+                & np.all(np.isfinite(centroids_mni), axis=1)
+                & hemisphere_mask
+            )
+            if not np.any(finite_mask):
+                continue
+
+            component_centroids = centroids_mni[finite_mask]
+            component_values = component_values[finite_mask]
+            abs_values = np.abs(component_values)
+            if abs_values.size == 0:
+                continue
+
+            vmax_abs = float(np.nanmax(abs_values))
+            if not np.isfinite(vmax_abs) or np.isclose(vmax_abs, 0.0):
+                radii = np.full(component_values.shape[0], 3.0, dtype=float)
+            else:
+                radii = 2.5 + 2.5 * (abs_values / vmax_abs)
+
+            finite_values = component_values[np.isfinite(component_values)]
+            if finite_values.size == 0:
+                continue
+            vmin = float(np.nanmin(finite_values))
+            vmax = float(np.nanmax(finite_values))
+            if np.isclose(vmin, vmax):
+                vmin -= 1.0
+                vmax += 1.0
+
+            colors = np.asarray(
+                cmap(Normalize(vmin=vmin, vmax=vmax)(component_values))[:, :3],
+                dtype=float,
+            )
+            row = int(panel_idx // n_cols)
+            col = int(panel_idx % n_cols)
+            offset = np.array((col * x_step, row * y_step, 0.0), dtype=float)
+            fallback_center = (
+                float(offset[0] + template_shape[0] * 0.5),
+                float(offset[1] + template_shape[1] * 0.5),
+                float(offset[2] + template_shape[2] * 0.5),
+            )
+            try:
+                brain_actor = netplot.add_brain(
+                    netplot.mni_template,
+                    hemisphere=brain_hemi,
+                    opacity=0.16,
+                    offset=offset,
+                )
+                node_actor = netplot.add_nodes(
+                    component_centroids,
+                    node_radius=radii,
+                    node_color=colors,
+                    node_labels=None,
+                    offset=offset,
+                    return_actor=True,
+                )
+                self._apply_gradient_component_rotation(
+                    (brain_actor, node_actor),
+                    rotation_presets[comp_idx] if comp_idx < len(rotation_presets) else "Default",
+                    fallback_center=fallback_center,
+                )
+                title_actor = actor.text_3d(
+                    f"C{comp_idx + 1} ({rotation_presets[comp_idx] if comp_idx < len(rotation_presets) else 'Default'})",
+                    position=(
+                        float(offset[0] + template_shape[0] * 0.42),
+                        float(offset[1] + template_shape[1] + 12.0),
+                        title_z,
+                    ),
+                    color=(0.0, 0.0, 0.0),
+                    font_size=10,
+                    justification="center",
+                )
+                netplot.scene.add(title_actor)
+            except Exception as exc:
+                self.statusBar().showMessage(
+                    f"Failed to build network component {comp_idx + 1}: {exc}"
+                )
+                return
+            opened_components.append(comp_idx + 1)
+
+        if not opened_components:
+            self.statusBar().showMessage("No finite gradient nodes available for network render.")
+            return
+        netplot.scene.ResetCamera()
+        netplot.scene.ResetCameraClippingRange()
+        win_width = int(max(900, min(1800, n_cols * 420)))
+        win_height = int(max(700, min(1400, n_rows * 420)))
+        component_text = ", ".join(str(idx) for idx in opened_components)
+        self.statusBar().showMessage(
+            f"Opening Fury network viewer for components {component_text}."
+        )
+        QApplication.processEvents()
+        try:
+            window.show(
+                netplot.scene,
+                title=f"Gradients Network - {source_name}",
+                size=(win_width, win_height),
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"Failed to render network viewer: {exc}")
+            return
+        self.statusBar().showMessage("Closed Fury network viewer.")
 
     def _clear_plot(self) -> None:
         self.figure.clear()
@@ -5191,14 +7879,39 @@ class ConnectomeViewer(QMainWindow):
         self._reset_zoom_selector()
         self._matrix_full_xlim = None
         self._matrix_full_ylim = None
+        self._hover_vline = None
+        self._hover_hline = None
         if hasattr(self, "zoom_reset_button"):
             self.zoom_reset_button.setEnabled(False)
         self._set_plot_title("")
         self._reset_gradients_output()
         self._update_nbs_prepare_button()
         self._update_write_to_file_button()
+        self._update_view_labels_button()
         self.hover_label.setText("")
         self.canvas.draw_idle()
+
+    def _hide_hover_crosshair(self) -> bool:
+        changed = False
+        for line in (self._hover_vline, self._hover_hline):
+            if line is not None and line.get_visible():
+                line.set_visible(False)
+                changed = True
+        return changed
+
+    def _update_hover_crosshair(self, x_value: float, y_value: float) -> bool:
+        changed = False
+        if self._hover_vline is not None:
+            self._hover_vline.set_xdata([x_value, x_value])
+            if not self._hover_vline.get_visible():
+                self._hover_vline.set_visible(True)
+            changed = True
+        if self._hover_hline is not None:
+            self._hover_hline.set_ydata([y_value, y_value])
+            if not self._hover_hline.get_visible():
+                self._hover_hline.set_visible(True)
+            changed = True
+        return changed
 
     def _on_hover(self, event) -> None:
         if (
@@ -5208,6 +7921,8 @@ class ConnectomeViewer(QMainWindow):
             or event.xdata is None
             or event.ydata is None
         ):
+            if self._hide_hover_crosshair():
+                self.canvas.draw_idle()
             self.hover_label.setText("")
             return
         row = int(event.ydata)
@@ -5218,8 +7933,12 @@ class ConnectomeViewer(QMainWindow):
             or row >= self._current_matrix.shape[0]
             or col >= self._current_matrix.shape[1]
         ):
+            if self._hide_hover_crosshair():
+                self.canvas.draw_idle()
             self.hover_label.setText("")
             return
+        self._update_hover_crosshair(event.xdata, event.ydata)
+        self.canvas.draw_idle()
         row_label = str(row)
         col_label = str(col)
         if self._current_parcel_labels and row < len(self._current_parcel_labels):
@@ -5332,9 +8051,9 @@ def main() -> int:
             time.sleep(0.02)
 
     window = ConnectomeViewer()
-    _write_diagnostic_line(f"ConnectomeViewer constructed: {window!r}")
+    _write_diagnostic_line(f"DONALD constructed: {window!r}")
     try:
-        window.destroyed.connect(lambda *_args: _write_diagnostic_line("ConnectomeViewer destroyed"))
+        window.destroyed.connect(lambda *_args: _write_diagnostic_line("DONALD destroyed"))
     except Exception:
         pass
     if not str(window._results_dir_default or "").strip() and splash is not None:
