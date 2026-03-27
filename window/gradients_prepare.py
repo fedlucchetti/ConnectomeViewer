@@ -7,33 +7,41 @@ from pathlib import Path
 
 try:
     from PyQt6.QtWidgets import (
+        QAbstractItemView,
         QCheckBox,
         QComboBox,
         QDialog,
         QGridLayout,
         QGroupBox,
+        QHeaderView,
         QHBoxLayout,
         QLabel,
         QProgressBar,
         QPushButton,
         QSpinBox,
         QTabWidget,
+        QTableWidget,
+        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
     )
 except Exception:
     from PyQt5.QtWidgets import (
+        QAbstractItemView,
         QCheckBox,
         QComboBox,
         QDialog,
         QGridLayout,
         QGroupBox,
+        QHeaderView,
         QHBoxLayout,
         QLabel,
         QProgressBar,
         QPushButton,
         QSpinBox,
         QTabWidget,
+        QTableWidget,
+        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
     )
@@ -61,6 +69,8 @@ class GradientsPrepareDialog(QDialog):
         colormap_changed_callback=None,
         hemisphere_changed_callback=None,
         surface_mesh_changed_callback=None,
+        surface_render_count_changed_callback=None,
+        surface_procrustes_changed_callback=None,
         scatter_rotation_changed_callback=None,
         triangular_rgb_changed_callback=None,
         classification_fit_mode_changed_callback=None,
@@ -71,8 +81,11 @@ class GradientsPrepareDialog(QDialog):
         classification_component_changed_callback=None,
         classification_x_axis_changed_callback=None,
         classification_y_axis_changed_callback=None,
+        classification_ignore_lh_changed_callback=None,
+        classification_ignore_rh_changed_callback=None,
         open_classification_adjacency_callback=None,
         remove_classification_adjacency_callback=None,
+        precomputed_row_confirm_callback=None,
         network_component_changed_callback=None,
         rotation_changed_callback=None,
         parent=None,
@@ -89,6 +102,8 @@ class GradientsPrepareDialog(QDialog):
         self._colormap_changed_callback = colormap_changed_callback
         self._hemisphere_changed_callback = hemisphere_changed_callback
         self._surface_mesh_changed_callback = surface_mesh_changed_callback
+        self._surface_render_count_changed_callback = surface_render_count_changed_callback
+        self._surface_procrustes_changed_callback = surface_procrustes_changed_callback
         self._scatter_rotation_changed_callback = scatter_rotation_changed_callback
         self._triangular_rgb_changed_callback = triangular_rgb_changed_callback
         self._classification_fit_mode_changed_callback = classification_fit_mode_changed_callback
@@ -99,8 +114,11 @@ class GradientsPrepareDialog(QDialog):
         self._classification_component_changed_callback = classification_component_changed_callback
         self._classification_x_axis_changed_callback = classification_x_axis_changed_callback
         self._classification_y_axis_changed_callback = classification_y_axis_changed_callback
+        self._classification_ignore_lh_changed_callback = classification_ignore_lh_changed_callback
+        self._classification_ignore_rh_changed_callback = classification_ignore_rh_changed_callback
         self._open_classification_adjacency_callback = open_classification_adjacency_callback
         self._remove_classification_adjacency_callback = remove_classification_adjacency_callback
+        self._precomputed_row_confirm_callback = precomputed_row_confirm_callback
         self._network_component_changed_callback = network_component_changed_callback
         self._rotation_changed_callback = rotation_changed_callback
         self._busy = False
@@ -108,6 +126,9 @@ class GradientsPrepareDialog(QDialog):
         self._has_results = False
         self._can_classify = False
         self._has_classification_adjacency = False
+        self._precomputed_mode = False
+        self._precomputed_row_indices = []
+        self._surface_procrustes_available = False
 
         self.setWindowTitle("Gradients")
         self.resize(580, 560)
@@ -118,6 +139,10 @@ class GradientsPrepareDialog(QDialog):
         self.set_parcellation_path(parcellation_path)
         self.set_hemisphere_mode("both")
         self.set_surface_mesh("fsaverage4")
+        self.set_surface_render_component_limit(component_count)
+        self.set_surface_render_component_count(1)
+        self.set_surface_procrustes_enabled(False)
+        self.set_surface_procrustes_available(False)
         self.set_scatter_rotation("Default")
         self.set_triangular_rgb(False)
         self.set_classification_fit_mode("triangle")
@@ -126,7 +151,10 @@ class GradientsPrepareDialog(QDialog):
         self.set_classification_hemisphere_mode("both")
         self.set_classification_component_options(component_count, selected_component="1")
         self.set_classification_axes("gradient2", "gradient1")
+        self.set_classification_ignore_parcel_options([], [], selected_lh="", selected_rh="")
         self.set_classification_adjacency_path(None)
+        self.set_precomputed_mode(False)
+        self.set_precomputed_rows([], [], selected_row=None, summary_text="", selection_text="")
         self.set_rotation_presets([])
         self.set_progress(0, 1, 0, "Idle")
         self.set_theme(theme_name)
@@ -181,6 +209,38 @@ class GradientsPrepareDialog(QDialog):
         options_layout.setRowStretch(row + 1, 1)
         self.tabs.addTab(options_tab, "Compute")
 
+        self.precomputed_tab = QWidget()
+        precomputed_layout = QVBoxLayout(self.precomputed_tab)
+        self.precomputed_summary_label = QLabel("No precomputed gradients bundle loaded.")
+        self.precomputed_summary_label.setWordWrap(True)
+        precomputed_layout.addWidget(self.precomputed_summary_label, 0)
+
+        self.precomputed_selection_label = QLabel("Selected pair: none")
+        self.precomputed_selection_label.setWordWrap(True)
+        precomputed_layout.addWidget(self.precomputed_selection_label, 0)
+
+        self.precomputed_table = QTableWidget()
+        self.precomputed_table.setAlternatingRowColors(True)
+        self.precomputed_table.verticalHeader().setVisible(False)
+        try:
+            self.precomputed_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.precomputed_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.precomputed_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        except Exception:
+            self.precomputed_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.precomputed_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.precomputed_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.precomputed_table.itemSelectionChanged.connect(self._on_precomputed_table_selection_changed)
+        self.precomputed_table.itemDoubleClicked.connect(self._on_precomputed_table_double_clicked)
+        precomputed_layout.addWidget(self.precomputed_table, 1)
+
+        precomputed_actions = QHBoxLayout()
+        precomputed_actions.addStretch(1)
+        self.precomputed_confirm_button = QPushButton("Use selected row")
+        self.precomputed_confirm_button.clicked.connect(self._trigger_precomputed_row_confirm)
+        precomputed_actions.addWidget(self.precomputed_confirm_button, 0)
+        precomputed_layout.addLayout(precomputed_actions, 0)
+
         display_tab = QWidget()
         display_layout = QGridLayout(display_tab)
         row = 0
@@ -204,6 +264,19 @@ class GradientsPrepareDialog(QDialog):
         )
         self.surface_mesh_combo.currentTextChanged.connect(self._on_surface_mesh_changed)
         display_layout.addWidget(self.surface_mesh_combo, row, 1)
+        row += 1
+
+        display_layout.addWidget(QLabel("Gradients to render"), row, 0)
+        self.surface_render_count_spin = QSpinBox()
+        self.surface_render_count_spin.setRange(1, 10)
+        self.surface_render_count_spin.setValue(1)
+        self.surface_render_count_spin.valueChanged.connect(self._on_surface_render_count_changed)
+        display_layout.addWidget(self.surface_render_count_spin, row, 1)
+        row += 1
+
+        self.surface_procrustes_check = QCheckBox("Align to gradients_avg (Procrustes)")
+        self.surface_procrustes_check.toggled.connect(self._on_surface_procrustes_changed)
+        display_layout.addWidget(self.surface_procrustes_check, row, 0, 1, 2)
         row += 1
 
         self.render_3d_button = QPushButton("Render")
@@ -255,6 +328,22 @@ class GradientsPrepareDialog(QDialog):
         classification_layout.addWidget(self.classification_y_axis_combo, row, 1)
         row += 1
 
+        classification_layout.addWidget(QLabel("Ignore parcel (LH)"), row, 0)
+        self.classification_ignore_lh_combo = QComboBox()
+        self.classification_ignore_lh_combo.currentIndexChanged.connect(
+            self._on_classification_ignore_lh_changed
+        )
+        classification_layout.addWidget(self.classification_ignore_lh_combo, row, 1)
+        row += 1
+
+        classification_layout.addWidget(QLabel("Ignore parcel (RH)"), row, 0)
+        self.classification_ignore_rh_combo = QComboBox()
+        self.classification_ignore_rh_combo.currentIndexChanged.connect(
+            self._on_classification_ignore_rh_changed
+        )
+        classification_layout.addWidget(self.classification_ignore_rh_combo, row, 1)
+        row += 1
+
         classification_layout.addWidget(QLabel("fsaverage scale"), row, 0)
         self.classification_surface_mesh_combo = QComboBox()
         self.classification_surface_mesh_combo.addItems(
@@ -268,7 +357,7 @@ class GradientsPrepareDialog(QDialog):
 
         classification_layout.addWidget(QLabel("Hemisphere"), row, 0)
         self.classification_hemisphere_combo = QComboBox()
-        self.classification_hemisphere_combo.addItems(["Both", "LH", "RH"])
+        self.classification_hemisphere_combo.addItems(["Both", "LH", "RH", "Separate"])
         self.classification_hemisphere_combo.currentTextChanged.connect(
             self._on_classification_hemisphere_changed
         )
@@ -417,6 +506,20 @@ class GradientsPrepareDialog(QDialog):
             except Exception:
                 pass
 
+    def _on_surface_render_count_changed(self, value):
+        if self._surface_render_count_changed_callback is not None:
+            try:
+                self._surface_render_count_changed_callback(int(value))
+            except Exception:
+                pass
+
+    def _on_surface_procrustes_changed(self, checked):
+        if self._surface_procrustes_changed_callback is not None:
+            try:
+                self._surface_procrustes_changed_callback(bool(checked))
+            except Exception:
+                pass
+
     def _on_scatter_rotation_changed(self, value):
         if self._scatter_rotation_changed_callback is not None:
             try:
@@ -490,6 +593,24 @@ class GradientsPrepareDialog(QDialog):
             except Exception:
                 pass
 
+    def _on_classification_ignore_lh_changed(self, _index):
+        if self._classification_ignore_lh_changed_callback is not None:
+            try:
+                self._classification_ignore_lh_changed_callback(
+                    self.selected_classification_ignore_lh_parcel()
+                )
+            except Exception:
+                pass
+
+    def _on_classification_ignore_rh_changed(self, _index):
+        if self._classification_ignore_rh_changed_callback is not None:
+            try:
+                self._classification_ignore_rh_changed_callback(
+                    self.selected_classification_ignore_rh_parcel()
+                )
+            except Exception:
+                pass
+
     def _on_rotation_changed(self, index, value):
         if self._rotation_changed_callback is not None:
             try:
@@ -532,6 +653,17 @@ class GradientsPrepareDialog(QDialog):
         if self._remove_classification_adjacency_callback is not None:
             self._remove_classification_adjacency_callback()
 
+    def _trigger_precomputed_row_confirm(self):
+        if self._precomputed_row_confirm_callback is None:
+            return
+        row_index = self.selected_precomputed_row_index()
+        if row_index is None:
+            return
+        try:
+            self._precomputed_row_confirm_callback(int(row_index))
+        except Exception:
+            pass
+
     def _trigger_render_network(self):
         if self._render_network_callback is not None:
             self._render_network_callback()
@@ -550,6 +682,12 @@ class GradientsPrepareDialog(QDialog):
 
     def selected_surface_mesh(self) -> str:
         return self.surface_mesh_combo.currentText().strip()
+
+    def selected_surface_render_component_count(self) -> int:
+        return int(self.surface_render_count_spin.value())
+
+    def use_surface_procrustes(self) -> bool:
+        return bool(self.surface_procrustes_check.isChecked())
 
     def selected_scatter_rotation(self) -> str:
         return self.scatter_rotation_combo.currentText().strip()
@@ -594,11 +732,28 @@ class GradientsPrepareDialog(QDialog):
             return "gradient1"
         return str(value).strip() or "gradient1"
 
+    def selected_classification_ignore_lh_parcel(self) -> str:
+        value = self.classification_ignore_lh_combo.currentData()
+        return str(value or "").strip()
+
+    def selected_classification_ignore_rh_parcel(self) -> str:
+        value = self.classification_ignore_rh_combo.currentData()
+        return str(value or "").strip()
+
     def selected_network_component(self) -> str:
         value = self.network_component_combo.currentData()
         if value is None:
             return "all"
         return str(value).strip() or "all"
+
+    def selected_precomputed_row_index(self):
+        selected_items = self.precomputed_table.selectedItems()
+        if not selected_items:
+            return None
+        row = selected_items[0].row()
+        if row < 0 or row >= len(self._precomputed_row_indices):
+            return None
+        return self._precomputed_row_indices[row]
 
     def rotation_presets(self):
         return [combo.currentText().strip() for combo in self._rotation_combos]
@@ -682,11 +837,97 @@ class GradientsPrepareDialog(QDialog):
         self.progress_bar.setValue(int(value))
         self.progress_bar.setFormat(str(text or ""))
 
+    def set_precomputed_mode(self, enabled: bool) -> None:
+        self._precomputed_mode = bool(enabled)
+        tab_index = self.tabs.indexOf(self.precomputed_tab)
+        if self._precomputed_mode and tab_index < 0:
+            self.tabs.insertTab(1, self.precomputed_tab, "Covars")
+        elif not self._precomputed_mode and tab_index >= 0:
+            self.tabs.removeTab(tab_index)
+        self._refresh_action_state()
+
+    def focus_precomputed_tab(self) -> None:
+        tab_index = self.tabs.indexOf(self.precomputed_tab)
+        if tab_index >= 0:
+            self.tabs.setCurrentIndex(tab_index)
+
+    def set_precomputed_rows(
+        self,
+        columns,
+        rows,
+        *,
+        selected_row=None,
+        summary_text="",
+        selection_text="",
+    ) -> None:
+        self.precomputed_summary_label.setText(str(summary_text or "No precomputed gradients bundle loaded."))
+        self.precomputed_selection_label.setText(str(selection_text or "Selected pair: none"))
+
+        row_dicts = [dict(row) for row in list(rows or [])]
+        self._precomputed_row_indices = [int(row.get("__row_index__", idx)) for idx, row in enumerate(row_dicts)]
+        visible_columns = [str(col) for col in list(columns or []) if str(col) != "__row_index__"]
+
+        self.precomputed_table.blockSignals(True)
+        self.precomputed_table.clear()
+        self.precomputed_table.setColumnCount(len(visible_columns) + 1)
+        self.precomputed_table.setHorizontalHeaderLabels(["Index"] + visible_columns)
+        self.precomputed_table.setRowCount(len(row_dicts))
+
+        for table_row, row_data in enumerate(row_dicts):
+            index_item = QTableWidgetItem(str(self._precomputed_row_indices[table_row]))
+            self.precomputed_table.setItem(table_row, 0, index_item)
+            for col_idx, column_name in enumerate(visible_columns, start=1):
+                item = QTableWidgetItem(str(row_data.get(column_name, "")))
+                self.precomputed_table.setItem(table_row, col_idx, item)
+
+        header = self.precomputed_table.horizontalHeader()
+        if header is not None and self.precomputed_table.columnCount() > 0:
+            try:
+                header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+                for col_idx in range(1, self.precomputed_table.columnCount() - 1):
+                    header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(
+                    self.precomputed_table.columnCount() - 1,
+                    QHeaderView.ResizeMode.Stretch,
+                )
+            except Exception:
+                header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+                for col_idx in range(1, self.precomputed_table.columnCount() - 1):
+                    header.setSectionResizeMode(col_idx, QHeaderView.ResizeToContents)
+                header.setSectionResizeMode(
+                    self.precomputed_table.columnCount() - 1,
+                    QHeaderView.Stretch,
+                )
+
+        if selected_row is not None:
+            target_row = -1
+            try:
+                selected_row = int(selected_row)
+            except Exception:
+                selected_row = None
+            if selected_row is not None:
+                for table_row, source_row in enumerate(self._precomputed_row_indices):
+                    if int(source_row) == selected_row:
+                        target_row = table_row
+                        break
+            if target_row >= 0:
+                self.precomputed_table.selectRow(target_row)
+        elif len(row_dicts) == 1:
+            self.precomputed_table.selectRow(0)
+
+        self.precomputed_table.blockSignals(False)
+        self._refresh_action_state()
+
     def set_hemisphere_mode(self, value: str) -> None:
         text = str(value or "both").strip().upper()
-        if text not in {"BOTH", "LH", "RH"}:
+        if text not in {"BOTH", "LH", "RH", "SEPARATE"}:
             text = "BOTH"
-        display = "Both" if text == "BOTH" else text
+        if text == "BOTH":
+            display = "Both"
+        elif text == "SEPARATE":
+            display = "Separate"
+        else:
+            display = text
         self.hemisphere_combo.blockSignals(True)
         if self.hemisphere_combo.findText(display) >= 0:
             self.hemisphere_combo.setCurrentText(display)
@@ -699,6 +940,39 @@ class GradientsPrepareDialog(QDialog):
         self.surface_mesh_combo.blockSignals(True)
         self.surface_mesh_combo.setCurrentText(text)
         self.surface_mesh_combo.blockSignals(False)
+
+    def set_surface_render_component_limit(self, value: int) -> None:
+        try:
+            count = int(value)
+        except Exception:
+            count = 1
+        count = max(1, min(10, count))
+        self.surface_render_count_spin.blockSignals(True)
+        self.surface_render_count_spin.setRange(1, count)
+        current = self.surface_render_count_spin.value()
+        self.surface_render_count_spin.setValue(max(1, min(current, count)))
+        self.surface_render_count_spin.blockSignals(False)
+
+    def set_surface_render_component_count(self, value: int) -> None:
+        try:
+            count = int(value)
+        except Exception:
+            count = 1
+        count = max(1, min(count, self.surface_render_count_spin.maximum()))
+        self.surface_render_count_spin.blockSignals(True)
+        self.surface_render_count_spin.setValue(count)
+        self.surface_render_count_spin.blockSignals(False)
+
+    def set_surface_procrustes_enabled(self, enabled: bool) -> None:
+        self.surface_procrustes_check.blockSignals(True)
+        self.surface_procrustes_check.setChecked(bool(enabled))
+        self.surface_procrustes_check.blockSignals(False)
+
+    def set_surface_procrustes_available(self, available: bool) -> None:
+        self._surface_procrustes_available = bool(available)
+        if not self._surface_procrustes_available:
+            self.set_surface_procrustes_enabled(False)
+        self._refresh_action_state()
 
     def set_scatter_rotation(self, value: str) -> None:
         text = str(value or "Default").strip()
@@ -791,6 +1065,10 @@ class GradientsPrepareDialog(QDialog):
         self._set_classification_axis_combo(self.classification_x_axis_combo, x_axis, "gradient2")
         self._set_classification_axis_combo(self.classification_y_axis_combo, y_axis, "gradient1")
 
+    def set_classification_ignore_parcel_options(self, lh_names, rh_names, *, selected_lh="", selected_rh="") -> None:
+        self._set_ignore_parcel_combo(self.classification_ignore_lh_combo, lh_names, selected_lh)
+        self._set_ignore_parcel_combo(self.classification_ignore_rh_combo, rh_names, selected_rh)
+
     @staticmethod
     def _set_classification_axis_combo(combo, value, fallback) -> None:
         selected = str(value or fallback).strip().lower()
@@ -803,6 +1081,28 @@ class GradientsPrepareDialog(QDialog):
             index = 0
         combo.blockSignals(True)
         combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _set_ignore_parcel_combo(combo, names, selected_name) -> None:
+        selected = str(selected_name or "").strip()
+        unique_names = []
+        seen = set()
+        for name in list(names or []):
+            text = str(name or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            unique_names.append(text)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("None", "")
+        selected_index = 0
+        for idx, text in enumerate(unique_names, start=1):
+            combo.addItem(text, text)
+            if text == selected:
+                selected_index = idx
+        combo.setCurrentIndex(selected_index)
         combo.blockSignals(False)
 
     def set_rotation_presets(self, presets) -> None:
@@ -870,12 +1170,14 @@ class GradientsPrepareDialog(QDialog):
 
     def _refresh_action_state(self) -> None:
         can_interact = not self._busy
-        self.compute_button.setEnabled(self._can_compute and can_interact)
+        self.compute_button.setEnabled(self._can_compute and can_interact and not self._precomputed_mode)
         self.matrix_combo.setEnabled(can_interact)
-        self.components_spin.setEnabled(can_interact)
+        self.components_spin.setEnabled(can_interact and not self._precomputed_mode)
         self.parcellation_button.setEnabled(can_interact)
         self.hemisphere_combo.setEnabled(can_interact)
         self.surface_mesh_combo.setEnabled(can_interact)
+        self.surface_render_count_spin.setEnabled(can_interact)
+        self.surface_procrustes_check.setEnabled(can_interact and self._surface_procrustes_available)
         self.scatter_rotation_combo.setEnabled(can_interact)
         self.triangular_rgb_check.setEnabled(can_interact)
         self.classification_fit_mode_combo.setEnabled(can_interact)
@@ -886,9 +1188,17 @@ class GradientsPrepareDialog(QDialog):
         self.classification_component_combo.setEnabled(can_interact)
         self.classification_x_axis_combo.setEnabled(can_interact)
         self.classification_y_axis_combo.setEnabled(can_interact)
+        self.classification_ignore_lh_combo.setEnabled(can_interact)
+        self.classification_ignore_rh_combo.setEnabled(can_interact)
         self.classification_adjacency_button.setEnabled(can_interact)
         self.classification_adjacency_remove_button.setEnabled(
             can_interact and self._has_classification_adjacency
+        )
+        self.precomputed_table.setEnabled(can_interact and self._precomputed_mode)
+        self.precomputed_confirm_button.setEnabled(
+            can_interact
+            and self._precomputed_mode
+            and self.selected_precomputed_row_index() is not None
         )
         self.network_component_combo.setEnabled(can_interact)
         for combo in self._rotation_combos:
@@ -902,6 +1212,12 @@ class GradientsPrepareDialog(QDialog):
         )
         self.render_network_button.setEnabled(self._has_results and can_interact)
 
+    def _on_precomputed_table_selection_changed(self):
+        self._refresh_action_state()
+
+    def _on_precomputed_table_double_clicked(self, _item):
+        self._trigger_precomputed_row_confirm()
+
     def set_theme(self, theme_name="Dark"):
         theme = str(theme_name or "Dark").strip().title()
         if theme not in {"Light", "Dark", "Teya", "Donald"}:
@@ -911,12 +1227,13 @@ class GradientsPrepareDialog(QDialog):
                 "QDialog, QWidget { background: #1f2430; color: #e5e7eb; }"
                 "QGroupBox { border: 1px solid #5f6d82; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
                 "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; border-radius: 6px; padding: 5px 8px; }"
+                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; border-radius: 6px; padding: 5px 8px; }"
                 "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #5f6d82; border-radius: 2px; background: #2d3646; }"
                 "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
                 "QTabWidget::pane { border: 1px solid #5f6d82; border-radius: 8px; top: -1px; }"
                 "QTabBar::tab { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
                 "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
+                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
                 "QPushButton:hover { background: #374256; }"
                 "QProgressBar { border: 1px solid #5f6d82; border-radius: 6px; text-align: center; background: #2d3646; }"
                 "QProgressBar::chunk { background: #2563eb; border-radius: 5px; }"
@@ -926,12 +1243,13 @@ class GradientsPrepareDialog(QDialog):
                 "QDialog, QWidget { background: #ffd0e5; color: #0b7f7a; }"
                 "QGroupBox { border: 1px solid #1db8b2; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
                 "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 6px; padding: 5px 8px; }"
+                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 6px; padding: 5px 8px; }"
                 "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #1db8b2; border-radius: 2px; background: #ffe6f1; }"
                 "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
                 "QTabWidget::pane { border: 1px solid #1db8b2; border-radius: 8px; top: -1px; }"
                 "QTabBar::tab { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
                 "QTabBar::tab:selected { background: #2ecfc9; color: #073f3c; }"
+                "QTableWidget::item:selected { background: #2ecfc9; color: #073f3c; }"
                 "QPushButton:hover { background: #ffb1d5; }"
                 "QProgressBar { border: 1px solid #1db8b2; border-radius: 6px; text-align: center; background: #ffc0dc; }"
                 "QProgressBar::chunk { background: #2ecfc9; border-radius: 5px; }"
@@ -941,12 +1259,13 @@ class GradientsPrepareDialog(QDialog):
                 "QDialog, QWidget { background: #d97706; color: #ffffff; }"
                 "QGroupBox { border: 1px solid #f3a451; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
                 "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; border-radius: 6px; padding: 5px 8px; }"
+                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; border-radius: 6px; padding: 5px 8px; }"
                 "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #f3a451; border-radius: 2px; background: #c96a04; }"
                 "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
                 "QTabWidget::pane { border: 1px solid #f3a451; border-radius: 8px; top: -1px; }"
                 "QTabBar::tab { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
                 "QTabBar::tab:selected { background: #ffd19e; color: #7c2d12; }"
+                "QTableWidget::item:selected { background: #ffd19e; color: #7c2d12; }"
                 "QPushButton:hover { background: #c76b06; }"
                 "QProgressBar { border: 1px solid #f3a451; border-radius: 6px; text-align: center; background: #b85f00; }"
                 "QProgressBar::chunk { background: #ffd19e; border-radius: 5px; }"
@@ -956,12 +1275,13 @@ class GradientsPrepareDialog(QDialog):
                 "QDialog, QWidget { background: #f4f6f9; color: #1f2937; }"
                 "QGroupBox { border: 1px solid #b7c0cc; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
                 "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; border-radius: 6px; padding: 5px 8px; }"
+                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; border-radius: 6px; padding: 5px 8px; }"
                 "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #b7c0cc; border-radius: 2px; background: #ffffff; }"
                 "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
                 "QTabWidget::pane { border: 1px solid #b7c0cc; border-radius: 8px; top: -1px; }"
                 "QTabBar::tab { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
                 "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
+                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
                 "QPushButton:hover { background: #edf2f7; }"
                 "QProgressBar { border: 1px solid #b7c0cc; border-radius: 6px; text-align: center; background: #ffffff; }"
                 "QProgressBar::chunk { background: #2563eb; border-radius: 5px; }"

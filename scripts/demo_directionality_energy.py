@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Standalone 2D demo for path directionality energy and free energy.
+"""Standalone 2D demo for path-segment penalties and free energy.
 
-This mirrors the updated directionality logic used in the classification
+This mirrors the updated path-energy logic used in the classification
 scatter free-energy view:
 
     alignment_i = step_unit_i dot ref_unit
-    energy_i = 1 - alignment_i
+    direction_penalty_i = 1 - alignment_i
+    proximity_penalty_i = d_line_i / |ref|
+    energy_i = direction_penalty_i + proximity_penalty_i
     total_path_energy = sum(energy_i)
     F = -(1 / lambda) * log(sum(exp(-lambda * total_path_energy)))
 
-The demo creates two path ensembles between the same endpoints:
+The demo draws:
 
-1. Similar paths:
-   mild deviations, mostly aligned with the reference direction
-2. Diverse paths:
-   larger detours, including backward-pointing segments
+1. One explicit example path with per-segment penalties highlighted
+2. A coherent ensemble of similar paths
+3. A diverse ensemble with detours and backward segments
+4. The resulting free-energy curves as lambda varies
 """
 
 from __future__ import annotations
@@ -24,21 +26,50 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection
 
 
-def directionality_energy(path_points: np.ndarray, ref_unit: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
-    """Return per-segment alignments, energy contributions, and total path energy."""
+def _point_distances_to_line(
+    sample_points: np.ndarray,
+    line_start: np.ndarray,
+    line_end: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Return perpendicular distances of points to a 2D line and the line length."""
+    points = np.asarray(sample_points, dtype=float)
+    start = np.asarray(line_start, dtype=float).reshape(-1)
+    end = np.asarray(line_end, dtype=float).reshape(-1)
+    if points.ndim != 2 or points.shape[1] != 2 or start.shape != (2,) or end.shape != (2,):
+        raise ValueError("Line-distance inputs must be 2D coordinates.")
+
+    line_vector = np.asarray(end - start, dtype=float)
+    line_length = float(np.linalg.norm(line_vector))
+    if line_length <= 0.0:
+        raise ValueError("Reference line must have non-zero length.")
+    line_unit = line_vector / line_length
+    rel = points - start[np.newaxis, :]
+    cross_vals = rel[:, 0] * line_unit[1] - rel[:, 1] * line_unit[0]
+    return np.abs(np.asarray(cross_vals, dtype=float)), float(line_length)
+
+
+def path_energy_breakdown(
+    path_points: np.ndarray,
+    ref_start: np.ndarray,
+    ref_end: np.ndarray,
+) -> dict:
+    """Return per-segment energy terms and total path energy."""
     path_points = np.asarray(path_points, dtype=float)
-    ref_unit = np.asarray(ref_unit, dtype=float).reshape(-1)
     if path_points.ndim != 2 or path_points.shape[1] != 2 or path_points.shape[0] < 2:
         raise ValueError("`path_points` must have shape (N, 2) with N >= 2.")
-    if ref_unit.shape != (2,):
-        raise ValueError("`ref_unit` must be a 2D unit vector.")
+    ref_start = np.asarray(ref_start, dtype=float).reshape(-1)
+    ref_end = np.asarray(ref_end, dtype=float).reshape(-1)
+    if ref_start.shape != (2,) or ref_end.shape != (2,):
+        raise ValueError("Reference endpoints must be 2D vectors.")
 
-    ref_norm = float(np.linalg.norm(ref_unit))
+    ref_vec = np.asarray(ref_end - ref_start, dtype=float)
+    ref_norm = float(np.linalg.norm(ref_vec))
     if ref_norm <= 0.0:
         raise ValueError("Reference vector must have non-zero norm.")
-    ref_unit = ref_unit / ref_norm
+    ref_unit = ref_vec / ref_norm
 
     steps = np.diff(path_points, axis=0)
     step_norms = np.linalg.norm(steps, axis=1)
@@ -48,9 +79,24 @@ def directionality_energy(path_points: np.ndarray, ref_unit: np.ndarray) -> tupl
 
     step_units = steps / step_norms[:, np.newaxis]
     alignments = np.clip(step_units @ ref_unit, -1.0, 1.0)
-    segment_energies = 1.0 - alignments
+    direction_penalties = 1.0 - alignments
+
+    midpoints = 0.5 * (path_points[:-1, :] + path_points[1:, :])
+    line_distances, line_length = _point_distances_to_line(midpoints, ref_start, ref_end)
+    proximity_penalties = line_distances / line_length
+    segment_energies = direction_penalties + proximity_penalties
     total_energy = float(np.sum(segment_energies))
-    return alignments, segment_energies, total_energy
+    return {
+        "alignments": alignments,
+        "direction_penalties": direction_penalties,
+        "line_distances": line_distances,
+        "proximity_penalties": proximity_penalties,
+        "segment_energies": segment_energies,
+        "total_energy": total_energy,
+        "ref_unit": ref_unit,
+        "ref_length": float(line_length),
+        "midpoints": midpoints,
+    }
 
 
 def stable_free_energy(energies: np.ndarray, lam: float) -> float:
@@ -78,6 +124,10 @@ def build_ensembles():
     end = np.asarray((5.0, 2.0), dtype=float)
     ref_vec = end - start
     ref_unit = ref_vec / np.linalg.norm(ref_vec)
+    example_path = np.asarray(
+        [(0.0, 0.0), (1.0, 0.3), (2.0, 1.0), (3.1, 0.8), (4.2, 1.6), (5.0, 2.0)],
+        dtype=float,
+    )
 
     # Each path has 6 points -> 5 segments.
     similar_paths = [
@@ -101,6 +151,7 @@ def build_ensembles():
         "end": end,
         "ref_vec": ref_vec,
         "ref_unit": ref_unit,
+        "example_path": example_path,
         "ensembles": [
             {"name": "Similar paths", "paths": similar_paths, "color": "#2563eb"},
             {"name": "Diverse paths", "paths": diverse_paths, "color": "#dc2626"},
@@ -108,22 +159,20 @@ def build_ensembles():
     }
 
 
-def summarize_ensemble(name: str, paths: list[np.ndarray], ref_unit: np.ndarray, lam: float) -> dict:
+def summarize_ensemble(name: str, paths: list[np.ndarray], ref_start: np.ndarray, ref_end: np.ndarray, lam: float) -> dict:
     """Compute per-path energies and ensemble free energy."""
     summaries = []
     total_energies = []
     for idx, path in enumerate(paths, start=1):
-        alignments, segment_energies, total_energy = directionality_energy(path, ref_unit)
+        breakdown = path_energy_breakdown(path, ref_start, ref_end)
         summaries.append(
             {
                 "index": idx,
                 "path": np.asarray(path, dtype=float),
-                "alignments": alignments,
-                "segment_energies": segment_energies,
-                "total_energy": total_energy,
+                **breakdown,
             }
         )
-        total_energies.append(total_energy)
+        total_energies.append(float(breakdown["total_energy"]))
     total_energies = np.asarray(total_energies, dtype=float)
     return {
         "name": name,
@@ -143,18 +192,118 @@ def print_summary(payload: dict, lam: float) -> None:
     print(f"  lambda = {lam:.4f}")
     print("")
 
+    example = path_energy_breakdown(payload["example_path"], payload["start"], payload["end"])
+    print("Example path penalty breakdown")
+    for idx, (dot, e_dir, d_line, e_line, e_seg) in enumerate(
+        zip(
+            example["alignments"],
+            example["direction_penalties"],
+            example["line_distances"],
+            example["proximity_penalties"],
+            example["segment_energies"],
+        ),
+        start=1,
+    ):
+        print(
+            f"  seg {idx}: dot={dot:.3f} | 1-dot={e_dir:.3f} | "
+            f"d_line={d_line:.3f} | d_line/|ref|={e_line:.3f} | Eseg={e_seg:.3f}"
+        )
+    print(f"  Example total energy = {example['total_energy']:.6f}")
+    print("")
+
     for ensemble in payload["ensembles"]:
-        summary = summarize_ensemble(ensemble["name"], ensemble["paths"], payload["ref_unit"], lam)
+        summary = summarize_ensemble(ensemble["name"], ensemble["paths"], payload["start"], payload["end"], lam)
         print(summary["name"])
         for path_summary in summary["paths"]:
             dots = ", ".join(f"{value:.3f}" for value in path_summary["alignments"])
+            dir_terms = ", ".join(f"{value:.3f}" for value in path_summary["direction_penalties"])
+            line_terms = ", ".join(f"{value:.3f}" for value in path_summary["proximity_penalties"])
             energies = ", ".join(f"{value:.3f}" for value in path_summary["segment_energies"])
             print(
                 f"  path {path_summary['index']}: "
-                f"dots=[{dots}] | segE=[{energies}] | totalE={path_summary['total_energy']:.4f}"
+                f"dots=[{dots}] | dir=[{dir_terms}] | line=[{line_terms}] | "
+                f"segE=[{energies}] | totalE={path_summary['total_energy']:.4f}"
             )
         print(f"  Free energy F = {summary['free_energy']:.6f}")
         print("")
+
+
+def plot_penalty_breakdown(ax, path_summary: dict, start: np.ndarray, end: np.ndarray, ref_label: str) -> None:
+    """Draw one path with segment-by-segment penalties annotated."""
+    path = np.asarray(path_summary["path"], dtype=float)
+    segments = np.stack((path[:-1, :], path[1:, :]), axis=1)
+    energies = np.asarray(path_summary["segment_energies"], dtype=float)
+    line_distances = np.asarray(path_summary["line_distances"], dtype=float)
+    midpoints = np.asarray(path_summary["midpoints"], dtype=float)
+
+    collection = LineCollection(
+        segments,
+        cmap="plasma",
+        norm=plt.Normalize(float(np.min(energies)), float(np.max(energies)) if len(energies) > 1 else float(np.min(energies) + 1.0)),
+        linewidths=3.4,
+        alpha=0.95,
+    )
+    collection.set_array(energies)
+    ax.add_collection(collection)
+    ax.plot(
+        [start[0], end[0]],
+        [start[1], end[1]],
+        linestyle="--",
+        linewidth=2.0,
+        color="black",
+        alpha=0.8,
+        label=f"Reference {ref_label}",
+    )
+    ax.plot(path[:, 0], path[:, 1], color="#475569", linewidth=1.2, alpha=0.6)
+    ax.scatter(path[:, 0], path[:, 1], s=36, color="#111827", zorder=4)
+    ax.scatter([start[0], end[0]], [start[1], end[1]], s=95, c=["#ef4444", "#22c55e"], zorder=5)
+    ax.text(start[0], start[1] - 0.18, "R", ha="center", va="top", fontsize=11, fontweight="bold")
+    ax.text(end[0], end[1] - 0.18, "G", ha="center", va="top", fontsize=11, fontweight="bold")
+
+    ref_vector = np.asarray(end - start, dtype=float)
+    ref_length_sq = float(np.dot(ref_vector, ref_vector))
+    for idx, midpoint in enumerate(midpoints):
+        if ref_length_sq > 0.0:
+            projection = start + np.dot(midpoint - start, ref_vector) / ref_length_sq * ref_vector
+            ax.plot(
+                [midpoint[0], projection[0]],
+                [midpoint[1], projection[1]],
+                color="#94a3b8",
+                linewidth=1.0,
+                alpha=0.8,
+            )
+        ax.text(
+            midpoint[0],
+            midpoint[1] + 0.14,
+            (
+                f"s{idx + 1}\n"
+                f"1-dot={path_summary['direction_penalties'][idx]:.2f}\n"
+                f"line={path_summary['proximity_penalties'][idx]:.2f}"
+            ),
+            fontsize=8.0,
+            ha="center",
+            va="bottom",
+            bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "alpha": 0.88, "edgecolor": "#cbd5e1"},
+        )
+
+    cbar = plt.colorbar(collection, ax=ax, fraction=0.046, pad=0.03)
+    cbar.set_label("Segment energy")
+    ax.text(
+        0.02,
+        0.98,
+        f"Example total energy = {path_summary['total_energy']:.4f}\n"
+        f"Segments = direction penalty + line penalty",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9.3,
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "alpha": 0.88, "edgecolor": "#94a3b8"},
+    )
+    ax.set_title("Segment Penalty Breakdown")
+    ax.set_xlabel("Gradient X")
+    ax.set_ylabel("Gradient Y")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.25)
 
 
 def plot_ensemble(ax, ensemble_summary: dict, start: np.ndarray, end: np.ndarray, ref_label: str, color: str) -> None:
@@ -227,26 +376,32 @@ def plot_demo(payload: dict, lam: float, output: Path | None) -> None:
     start = payload["start"]
     end = payload["end"]
     ref_label = f"{payload['start_label']}{payload['end_label']}"
+    example_summary = {
+        "path": np.asarray(payload["example_path"], dtype=float),
+        **path_energy_breakdown(payload["example_path"], start, end),
+    }
 
     summaries = [
-        summarize_ensemble(ensemble["name"], ensemble["paths"], payload["ref_unit"], lam)
+        summarize_ensemble(ensemble["name"], ensemble["paths"], start, end, lam)
         for ensemble in payload["ensembles"]
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(18.2, 6.2), constrained_layout=True)
+    fig, axes = plt.subplots(1, 4, figsize=(24.0, 6.4), constrained_layout=True)
     fig.suptitle(
-        "Directionality Energy and Free Energy Demo\n"
-        "Left: coherent path family, Middle: diverse / misaligned family, Right: free energy vs lambda",
+        "Path-Energy and Free-Energy Demo\n"
+        "Left: one path with segment penalties, Middle: coherent family, Next: diverse family, Right: free energy vs lambda",
         fontsize=13,
     )
 
-    for ax, ensemble, summary in zip(axes[:2], payload["ensembles"], summaries):
+    plot_penalty_breakdown(axes[0], example_summary, start, end, ref_label)
+
+    for ax, ensemble, summary in zip(axes[1:3], payload["ensembles"], summaries):
         plot_ensemble(ax, summary, start, end, ref_label, ensemble["color"])
 
     lambda_min = 0.05
     lambda_max = max(5.0, float(lam) * 2.5)
     lambda_values = np.linspace(lambda_min, lambda_max, 200, dtype=float)
-    curve_ax = axes[2]
+    curve_ax = axes[3]
     for ensemble, summary in zip(payload["ensembles"], summaries):
         curve = free_energy_curve(summary["total_energies"], lambda_values)
         curve_ax.plot(
@@ -287,6 +442,8 @@ def plot_demo(payload: dict, lam: float, output: Path | None) -> None:
     for ax in axes[:2]:
         ax.set_xlim(*x_limits)
         ax.set_ylim(*y_limits)
+    axes[2].set_xlim(*x_limits)
+    axes[2].set_ylim(*y_limits)
 
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -298,7 +455,7 @@ def plot_demo(payload: dict, lam: float, output: Path | None) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="2D demo of directionality energy and free energy on similar vs diverse path ensembles."
+        description="2D demo of segment penalties and free energy on similar vs diverse path ensembles."
     )
     parser.add_argument(
         "--lambda-value",

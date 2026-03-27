@@ -2713,9 +2713,14 @@ class ConnectomeViewer(QMainWindow):
         self._default_gradient_colormap = self._preferences["gradient_colormap"]
         self._gradient_colormap_name = self._default_gradient_colormap
         self._gradient_selected_entry_id = None
+        self._gradient_precomputed_bundle = None
+        self._gradient_precomputed_selected_row = None
+        self._gradient_use_precomputed_bundle = False
         self._gradient_component_count = 4
         self._gradient_hemisphere_mode = "both"
         self._gradient_surface_mesh = "fsaverage4"
+        self._gradient_surface_render_count = 1
+        self._gradient_surface_procrustes = False
         self._gradient_classification_surface_mesh = self._gradient_surface_mesh
         self._gradient_classification_hemisphere_mode = "both"
         self._gradient_scatter_rotation = "Default"
@@ -2726,6 +2731,8 @@ class ConnectomeViewer(QMainWindow):
         self._gradient_classification_component = "1"
         self._gradient_classification_x_axis = "gradient2"
         self._gradient_classification_y_axis = "gradient1"
+        self._gradient_classification_ignore_lh_parcel = ""
+        self._gradient_classification_ignore_rh_parcel = ""
         self._gradient_classification_adjacency_path = ""
         self._gradient_classification_adjacency_cache = None
         self._gradient_network_component = "all"
@@ -3921,7 +3928,7 @@ class ConnectomeViewer(QMainWindow):
     @staticmethod
     def _normalize_gradient_hemisphere_mode(value: str) -> str:
         text = str(value or "both").strip().lower()
-        if text not in {"both", "lh", "rh"}:
+        if text not in {"both", "lh", "rh", "separate"}:
             text = "both"
         return text
 
@@ -3932,6 +3939,22 @@ class ConnectomeViewer(QMainWindow):
         if text not in valid:
             text = "fsaverage4"
         return text
+
+    @staticmethod
+    def _normalize_gradient_surface_render_count(value, max_components=None) -> int:
+        try:
+            count = int(value)
+        except Exception:
+            count = 1
+        if count < 1:
+            count = 1
+        if max_components is not None:
+            count = min(count, max(1, int(max_components)))
+        return count
+
+    @staticmethod
+    def _normalize_gradient_surface_procrustes(enabled) -> bool:
+        return bool(enabled)
 
     @staticmethod
     def _normalize_gradient_classification_component(value, max_components=None) -> str:
@@ -4037,7 +4060,28 @@ class ConnectomeViewer(QMainWindow):
                     return max(1, min(10, value))
         except Exception:
             pass
+        bundle = self._gradient_precomputed_bundle
+        if isinstance(bundle, dict):
+            try:
+                value = int(bundle.get("component_count_total", 0))
+            except Exception:
+                value = 0
+            if value > 0:
+                return max(1, min(10, value))
         return self._current_gradient_component_count()
+
+    def _gradient_surface_procrustes_available(self) -> bool:
+        bundle = self._gradient_precomputed_bundle
+        if not isinstance(bundle, dict):
+            return False
+        avg = bundle.get("gradients_avg")
+        if avg is None:
+            return False
+        try:
+            avg_array = np.asarray(avg, dtype=float)
+        except Exception:
+            return False
+        return avg_array.ndim == 2 and avg_array.shape[0] > 0 and avg_array.shape[1] > 0
 
     def _selected_gradient_hemisphere_mode(self) -> str:
         dialog = getattr(self, "_gradients_dialog", None)
@@ -4061,6 +4105,36 @@ class ConnectomeViewer(QMainWindow):
                 pass
         self._gradient_surface_mesh = self._normalize_gradient_surface_mesh(self._gradient_surface_mesh)
         return self._gradient_surface_mesh
+
+    def _selected_gradient_surface_render_count(self) -> int:
+        dialog = getattr(self, "_gradients_dialog", None)
+        available = self._available_gradient_network_component_count()
+        if dialog is not None and hasattr(dialog, "selected_surface_render_component_count"):
+            try:
+                self._gradient_surface_render_count = self._normalize_gradient_surface_render_count(
+                    dialog.selected_surface_render_component_count(),
+                    max_components=available,
+                )
+            except Exception:
+                pass
+        self._gradient_surface_render_count = self._normalize_gradient_surface_render_count(
+            self._gradient_surface_render_count,
+            max_components=available,
+        )
+        return self._gradient_surface_render_count
+
+    def _selected_gradient_surface_procrustes(self) -> bool:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None and hasattr(dialog, "use_surface_procrustes"):
+            try:
+                self._gradient_surface_procrustes = self._normalize_gradient_surface_procrustes(
+                    dialog.use_surface_procrustes()
+                )
+            except Exception:
+                pass
+        if not self._gradient_surface_procrustes_available():
+            self._gradient_surface_procrustes = False
+        return bool(self._gradient_surface_procrustes)
 
     def _selected_gradient_classification_surface_mesh(self) -> str:
         dialog = getattr(self, "_gradients_dialog", None)
@@ -4207,6 +4281,71 @@ class ConnectomeViewer(QMainWindow):
         )
         return self._gradient_classification_y_axis
 
+    def _selected_gradient_classification_ignore_lh_parcel(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None and hasattr(dialog, "selected_classification_ignore_lh_parcel"):
+            try:
+                self._gradient_classification_ignore_lh_parcel = str(
+                    dialog.selected_classification_ignore_lh_parcel() or ""
+                ).strip()
+            except Exception:
+                pass
+        self._gradient_classification_ignore_lh_parcel = str(
+            self._gradient_classification_ignore_lh_parcel or ""
+        ).strip()
+        return self._gradient_classification_ignore_lh_parcel
+
+    def _selected_gradient_classification_ignore_rh_parcel(self) -> str:
+        dialog = getattr(self, "_gradients_dialog", None)
+        if dialog is not None and hasattr(dialog, "selected_classification_ignore_rh_parcel"):
+            try:
+                self._gradient_classification_ignore_rh_parcel = str(
+                    dialog.selected_classification_ignore_rh_parcel() or ""
+                ).strip()
+            except Exception:
+                pass
+        self._gradient_classification_ignore_rh_parcel = str(
+            self._gradient_classification_ignore_rh_parcel or ""
+        ).strip()
+        return self._gradient_classification_ignore_rh_parcel
+
+    def _gradient_classification_ignore_parcel_options(self):
+        results = self._last_gradients or {}
+        projection_labels_raw = results.get("projection_labels", None)
+        if projection_labels_raw is None:
+            return {"lh": [], "rh": []}
+        try:
+            projection_labels = np.asarray(projection_labels_raw, dtype=int).reshape(-1)
+        except Exception:
+            return {"lh": [], "rh": []}
+        parcel_names = _to_string_list(results.get("parcel_names"))
+        if projection_labels.size == 0:
+            return {"lh": [], "rh": []}
+        if not parcel_names or len(parcel_names) != projection_labels.size:
+            parcel_names = [f"Parcel {int(label)}" for label in projection_labels.tolist()]
+        try:
+            hemisphere_codes = np.asarray(self._gradient_projection_hemisphere_codes(), dtype=int).reshape(-1)
+        except Exception:
+            hemisphere_codes = np.full(projection_labels.shape, -1, dtype=int)
+        if hemisphere_codes.shape != projection_labels.shape:
+            hemisphere_codes = np.full(projection_labels.shape, -1, dtype=int)
+
+        lh_names = []
+        rh_names = []
+        seen_lh = set()
+        seen_rh = set()
+        for name, code in zip(parcel_names, hemisphere_codes.tolist()):
+            text = str(name or "").strip()
+            if not text:
+                continue
+            if int(code) in {0, 2} and text not in seen_lh:
+                seen_lh.add(text)
+                lh_names.append(text)
+            if int(code) in {1, 2} and text not in seen_rh:
+                seen_rh.add(text)
+                rh_names.append(text)
+        return {"lh": lh_names, "rh": rh_names}
+
     def _is_gradient_classification_axis_available(self, axis_key: str, results=None) -> bool:
         current = self._last_gradients if results is None else results
         if not current:
@@ -4345,7 +4484,7 @@ class ConnectomeViewer(QMainWindow):
             else projection_labels,
             dtype=int,
         ).reshape(-1)
-        if labels.size == 0 or mode == "both":
+        if labels.size == 0 or mode in {"both", "separate"}:
             return np.ones(labels.shape, dtype=bool)
         codes = self._gradient_projection_hemisphere_codes()
         if codes.shape != labels.shape:
@@ -4419,12 +4558,27 @@ class ConnectomeViewer(QMainWindow):
         return matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
 
     def _update_gradients_button(self) -> None:
-        enabled = bool(self._available_gradient_matrix_entries())
+        enabled = bool(self._available_gradient_matrix_entries()) or isinstance(
+            self._gradient_precomputed_bundle,
+            dict,
+        )
         if hasattr(self, "gradients_open_button"):
             self.gradients_open_button.setEnabled(enabled)
         if hasattr(self, "compute_gradients_action"):
             self.compute_gradients_action.setEnabled(enabled)
         self._sync_gradients_dialog_state()
+
+    def _set_gradient_source_mode(self, use_precomputed: bool, *, reset_results: bool = False) -> None:
+        next_mode = bool(use_precomputed) and isinstance(self._gradient_precomputed_bundle, dict)
+        if next_mode == bool(self._gradient_use_precomputed_bundle):
+            if reset_results:
+                self._reset_gradients_output()
+            return
+        self._gradient_use_precomputed_bundle = next_mode
+        if reset_results:
+            self._reset_gradients_output()
+        else:
+            self._sync_gradients_dialog_state()
 
     def _on_gradient_component_changed(self, value: int) -> None:
         try:
@@ -4452,6 +4606,15 @@ class ConnectomeViewer(QMainWindow):
 
     def _on_gradient_surface_mesh_changed(self, value: str) -> None:
         self._gradient_surface_mesh = self._normalize_gradient_surface_mesh(value)
+
+    def _on_gradient_surface_render_count_changed(self, value: int) -> None:
+        self._gradient_surface_render_count = self._normalize_gradient_surface_render_count(
+            value,
+            max_components=self._available_gradient_network_component_count(),
+        )
+
+    def _on_gradient_surface_procrustes_changed(self, enabled: bool) -> None:
+        self._gradient_surface_procrustes = self._normalize_gradient_surface_procrustes(enabled)
 
     def _on_gradient_classification_surface_mesh_changed(self, value: str) -> None:
         self._gradient_classification_surface_mesh = self._normalize_gradient_surface_mesh(value)
@@ -4495,6 +4658,12 @@ class ConnectomeViewer(QMainWindow):
             default="gradient1",
         )
         self._sync_gradients_dialog_state()
+
+    def _on_gradient_classification_ignore_lh_changed(self, value: str) -> None:
+        self._gradient_classification_ignore_lh_parcel = str(value or "").strip()
+
+    def _on_gradient_classification_ignore_rh_changed(self, value: str) -> None:
+        self._gradient_classification_ignore_rh_parcel = str(value or "").strip()
 
     @staticmethod
     def _load_gradient_classification_adjacency_npz(path: Path):
@@ -4576,6 +4745,417 @@ class ConnectomeViewer(QMainWindow):
         self._sync_gradients_dialog_state()
         if show_status:
             self.statusBar().showMessage("Removed classification adjacency.")
+
+    @staticmethod
+    def _npz_optional_scalar_text(npz, *keys):
+        for key in keys:
+            if key not in npz:
+                continue
+            try:
+                values = np.asarray(npz[key])
+            except Exception:
+                continue
+            if values.ndim == 0:
+                return _display_text(values.item()).strip()
+            if values.size == 1:
+                return _display_text(values.reshape(-1)[0]).strip()
+        return ""
+
+    @staticmethod
+    def _npz_optional_display_vector(npz, *keys):
+        for key in keys:
+            if key not in npz:
+                continue
+            try:
+                values = _flatten_display_vector(npz[key])
+            except Exception:
+                values = None
+            if values is not None:
+                return [str(value) for value in values]
+        return None
+
+    @staticmethod
+    def _canonicalize_precomputed_gradients(raw_gradients, *, row_count=None, label_count=None):
+        gradients = np.asarray(raw_gradients, dtype=float)
+        if gradients.ndim != 3:
+            raise ValueError("Precomputed gradients must be a 3D array.")
+
+        sample_axis = 0
+        if row_count is not None:
+            try:
+                target_rows = int(row_count)
+            except Exception:
+                target_rows = 0
+            if target_rows > 0:
+                candidates = [idx for idx, size in enumerate(gradients.shape) if int(size) == target_rows]
+                if candidates:
+                    sample_axis = 0 if 0 in candidates else candidates[0]
+        gradients = np.moveaxis(gradients, sample_axis, 0)
+
+        if label_count is not None:
+            try:
+                target_labels = int(label_count)
+            except Exception:
+                target_labels = 0
+            if target_labels > 0:
+                if gradients.shape[2] == target_labels:
+                    pass
+                elif gradients.shape[1] == target_labels:
+                    gradients = np.swapaxes(gradients, 1, 2)
+                else:
+                    raise ValueError(
+                        f"Could not align gradients shape {tuple(gradients.shape)} to {target_labels} parcel labels."
+                    )
+        elif gradients.shape[1] > gradients.shape[2]:
+            gradients = np.swapaxes(gradients, 1, 2)
+
+        return np.asarray(gradients, dtype=float)
+
+    @staticmethod
+    def _canonicalize_average_gradients(raw_gradients_avg, *, label_count=None):
+        gradients_avg = np.asarray(raw_gradients_avg, dtype=float)
+        if gradients_avg.ndim != 2:
+            raise ValueError("gradients_avg must be a 2D array.")
+        if label_count is not None:
+            try:
+                target_labels = int(label_count)
+            except Exception:
+                target_labels = 0
+            if target_labels > 0:
+                if gradients_avg.shape[1] == target_labels:
+                    return np.asarray(gradients_avg, dtype=float)
+                if gradients_avg.shape[0] == target_labels:
+                    return np.asarray(gradients_avg.T, dtype=float)
+                raise ValueError(
+                    f"Could not align gradients_avg shape {tuple(gradients_avg.shape)} to {target_labels} parcel labels."
+                )
+        if gradients_avg.shape[1] >= gradients_avg.shape[0]:
+            return np.asarray(gradients_avg, dtype=float)
+        return np.asarray(gradients_avg.T, dtype=float)
+
+    def _load_precomputed_gradient_bundle(self, path: Path):
+        path = Path(path)
+        try:
+            with np.load(path, allow_pickle=True) as npz:
+                if "gradients" not in npz:
+                    return None
+
+                raw_gradients = np.asarray(npz["gradients"], dtype=float)
+
+                parcel_labels_raw = None
+                parcel_names_raw = None
+                for key in PARCEL_LABEL_KEYS:
+                    if key in npz:
+                        parcel_labels_raw = np.asarray(npz[key]).reshape(-1)
+                        break
+                for key in PARCEL_NAME_KEYS:
+                    if key in npz:
+                        parcel_names_raw = np.asarray(npz[key]).reshape(-1)
+                        break
+
+                label_count = None
+                parcel_labels = None
+                if parcel_labels_raw is not None:
+                    coerced = _coerce_label_indices(parcel_labels_raw, parcel_labels_raw.size)
+                    if coerced is None:
+                        raise ValueError("parcel_labels_group is present but invalid.")
+                    parcel_labels = np.asarray(coerced, dtype=int)
+                    label_count = parcel_labels.size
+
+                gradients_avg = None
+                if "gradients_avg" in npz:
+                    try:
+                        gradients_avg = self._canonicalize_average_gradients(
+                            npz["gradients_avg"],
+                            label_count=label_count,
+                        )
+                    except Exception:
+                        gradients_avg = None
+
+                subject_values = self._npz_optional_display_vector(
+                    npz,
+                    "subject_id_list",
+                    "participant_id_list",
+                    "subject_ids",
+                    "participant_ids",
+                )
+                session_values = self._npz_optional_display_vector(
+                    npz,
+                    "session_id_list",
+                    "session_ids",
+                )
+
+                candidate_row_count = 0
+                if subject_values:
+                    candidate_row_count = len(subject_values)
+                elif session_values:
+                    candidate_row_count = len(session_values)
+
+                covars_info = _load_covars_info(path)
+                covars_columns, covars_rows = _covars_to_rows(covars_info)
+                if covars_rows:
+                    candidate_row_count = len(covars_rows)
+
+                canonical_gradients = self._canonicalize_precomputed_gradients(
+                    raw_gradients,
+                    row_count=candidate_row_count or None,
+                    label_count=label_count,
+                )
+
+                n_rows = int(canonical_gradients.shape[0])
+                n_components = int(canonical_gradients.shape[1])
+                n_labels = int(canonical_gradients.shape[2])
+
+                if parcel_labels is None:
+                    parcel_labels = np.arange(1, n_labels + 1, dtype=int)
+                elif parcel_labels.size != n_labels:
+                    raise ValueError(
+                        f"parcel_labels_group has {parcel_labels.size} labels but gradients expect {n_labels} parcels."
+                    )
+                if np.unique(parcel_labels).size != parcel_labels.size:
+                    raise ValueError("parcel_labels_group must be unique for precomputed gradients.")
+
+                parcel_names = _to_string_list(parcel_names_raw) if parcel_names_raw is not None else None
+                if parcel_names is None or len(parcel_names) != n_labels:
+                    parcel_names = [f"Parcel {int(label)}" for label in parcel_labels.tolist()]
+
+                row_dicts = []
+                for row in list(covars_rows or []):
+                    if isinstance(row, dict):
+                        row_dicts.append(dict(row))
+                    else:
+                        row_dicts.append(
+                            {
+                                str(column): _display_text(value)
+                                for column, value in zip(list(covars_columns or []), list(row))
+                            }
+                        )
+                if row_dicts and len(row_dicts) != n_rows:
+                    row_dicts = []
+                    covars_columns = []
+                if not row_dicts:
+                    row_dicts = [{} for _ in range(n_rows)]
+                    covars_columns = []
+
+                def _merge_vector_column(column_name: str, values, *, overwrite: bool = False) -> None:
+                    if values is None or len(values) != n_rows:
+                        return
+                    if column_name not in covars_columns:
+                        covars_columns.append(column_name)
+                    for row_idx, raw_value in enumerate(values):
+                        text = _display_text(raw_value).strip()
+                        if overwrite or not str(row_dicts[row_idx].get(column_name, "")).strip():
+                            row_dicts[row_idx][column_name] = text
+
+                _merge_vector_column("participant_id", subject_values)
+                _merge_vector_column("session_id", session_values)
+                _merge_vector_column(
+                    "group",
+                    self._npz_optional_display_vector(npz, "group"),
+                )
+                _merge_vector_column(
+                    "modality",
+                    self._npz_optional_display_vector(npz, "modality"),
+                )
+                _merge_vector_column(
+                    "metabolites",
+                    self._npz_optional_display_vector(npz, "metabolites"),
+                )
+
+                parcellation_path = None
+                parcellation_text = self._npz_optional_scalar_text(npz, "parc_path", "parc_path.npy")
+                if parcellation_text:
+                    candidate = Path(parcellation_text).expanduser()
+                    if not candidate.is_absolute():
+                        candidate = (path.parent / candidate).resolve()
+                    parcellation_path = candidate
+        except Exception:
+            raise
+
+        summary = f"{path.name} | rows: {n_rows} | components: {n_components} | parcels: {n_labels}"
+        return {
+            "path": path,
+            "label": path.name,
+            "summary": summary,
+            "gradients": canonical_gradients,
+            "component_count_total": n_components,
+            "n_rows": n_rows,
+            "n_labels": n_labels,
+            "gradients_avg": None if gradients_avg is None else np.asarray(gradients_avg, dtype=float),
+            "parcel_labels": np.asarray(parcel_labels, dtype=int),
+            "parcel_names": list(parcel_names),
+            "covars_columns": [str(column) for column in covars_columns],
+            "covars_rows": row_dicts,
+            "parcellation_path": parcellation_path,
+        }
+
+    @staticmethod
+    def _gradient_precomputed_row_pair(bundle, row_index: int):
+        if not isinstance(bundle, dict):
+            return "", ""
+        rows = list(bundle.get("covars_rows") or [])
+        if row_index < 0 or row_index >= len(rows):
+            return "", ""
+        row = rows[row_index]
+        lower_map = {str(key).lower(): key for key in row.keys()}
+        participant_key = (
+            lower_map.get("participant_id")
+            or lower_map.get("subject_id")
+            or lower_map.get("participant")
+            or lower_map.get("subject")
+        )
+        session_key = lower_map.get("session_id") or lower_map.get("session") or lower_map.get("ses")
+        participant = _display_text(row.get(participant_key, "")).strip() if participant_key else ""
+        session = _display_text(row.get(session_key, "")).strip() if session_key else ""
+        return participant, session
+
+    def _gradient_precomputed_selection_text(self) -> str:
+        bundle = self._gradient_precomputed_bundle
+        if not isinstance(bundle, dict):
+            return "Selected pair: none"
+        row_index = self._gradient_precomputed_selected_row
+        if row_index is None:
+            return "Selected pair: none"
+        participant, session = self._gradient_precomputed_row_pair(bundle, int(row_index))
+        parts = [f"row {int(row_index)}"]
+        if participant:
+            parts.append(participant)
+        if session:
+            parts.append(session)
+        return "Selected pair: " + " | ".join(parts)
+
+    def _activate_precomputed_gradient_bundle(self, bundle) -> None:
+        if not isinstance(bundle, dict):
+            return
+        self._gradient_precomputed_bundle = bundle
+        self._gradient_precomputed_selected_row = None
+        self._gradient_use_precomputed_bundle = True
+        try:
+            self._gradient_component_count = max(
+                1,
+                min(10, int(bundle.get("component_count_total", 2))),
+            )
+        except Exception:
+            self._gradient_component_count = 2
+        self._gradient_surface_render_count = 1
+        self._gradient_surface_procrustes = False
+
+        parcellation_path = bundle.get("parcellation_path")
+        did_reset = False
+        if isinstance(parcellation_path, Path) and parcellation_path.exists():
+            active_path = Path(self._active_parcellation_path) if self._active_parcellation_path is not None else None
+            if active_path != parcellation_path:
+                did_reset = bool(self._set_active_parcellation(parcellation_path))
+        if not did_reset:
+            self._reset_gradients_output()
+
+        self._update_gradients_button()
+        self._open_gradients_dialog(prefer_precomputed=True)
+        if getattr(self, "_gradients_dialog", None) is not None and hasattr(self._gradients_dialog, "focus_precomputed_tab"):
+            try:
+                self._gradients_dialog.focus_precomputed_tab()
+            except Exception:
+                pass
+
+        status = f"Loaded precomputed gradients from {bundle.get('label', 'bundle')}. Select a participant/session row."
+        if isinstance(parcellation_path, Path) and not parcellation_path.exists():
+            status += " Bundle parcellation path was not found; set it manually before confirming."
+        self.statusBar().showMessage(status)
+
+    def _confirm_precomputed_gradient_row(self, row_index: int) -> None:
+        bundle = self._gradient_precomputed_bundle
+        if not isinstance(bundle, dict):
+            self.statusBar().showMessage("No precomputed gradients bundle is loaded.")
+            return
+
+        try:
+            row_index = int(row_index)
+        except Exception:
+            self.statusBar().showMessage("Invalid precomputed gradient row.")
+            return
+
+        gradients_stack = np.asarray(bundle.get("gradients"), dtype=float)
+        if gradients_stack.ndim != 3:
+            self.statusBar().showMessage("Precomputed gradients array is invalid.")
+            return
+        if row_index < 0 or row_index >= gradients_stack.shape[0]:
+            self.statusBar().showMessage("Selected participant/session row is out of range.")
+            return
+
+        parcel_labels = np.asarray(bundle.get("parcel_labels"), dtype=int).reshape(-1)
+        parcel_names = list(bundle.get("parcel_names") or [])
+        if len(parcel_names) != parcel_labels.size:
+            parcel_names = [f"Parcel {int(label)}" for label in parcel_labels.tolist()]
+        selected_components = np.asarray(gradients_stack[row_index], dtype=float)
+        if selected_components.ndim != 2:
+            self.statusBar().showMessage("Selected precomputed gradients row is not 2D.")
+            return
+        if selected_components.shape[1] == parcel_labels.size:
+            pass
+        elif selected_components.shape[0] == parcel_labels.size:
+            selected_components = np.swapaxes(selected_components, 0, 1)
+        else:
+            self.statusBar().showMessage(
+                "Selected precomputed gradients row does not align with the parcel label count."
+            )
+            return
+
+        total_components = int(selected_components.shape[0])
+        n_grad = max(1, min(10, total_components))
+        components = np.asarray(selected_components[:n_grad, :], dtype=float).T
+        if components.shape[0] != parcel_labels.size:
+            self.statusBar().showMessage("Projected node count does not match the parcel label count.")
+            return
+        participant, session = self._gradient_precomputed_row_pair(bundle, row_index)
+        display_bits = [bundle.get("label", "precomputed gradients")]
+        if participant:
+            display_bits.append(participant)
+        if session:
+            display_bits.append(session)
+        source_name = " | ".join(display_bits)
+
+        stem_bits = [bundle.get("path", Path("gradients")).stem]
+        if participant:
+            stem_bits.append(self._safe_name_fragment(_normalize_subject_token(participant)))
+        if session:
+            stem_bits.append(self._safe_name_fragment(_normalize_session_token(session)))
+        default_name = "_".join(bit for bit in stem_bits if bit) + f"_diffusion_components-{n_grad}.nii.gz"
+
+        template_path_text = ""
+        bundle_parcellation = bundle.get("parcellation_path")
+        if isinstance(bundle_parcellation, Path):
+            template_path_text = str(bundle_parcellation)
+        elif self._active_parcellation_path is not None:
+            template_path_text = str(self._active_parcellation_path)
+
+        self._gradient_component_count = n_grad
+        self._gradient_surface_render_count = 1
+        self._gradient_precomputed_selected_row = row_index
+        self._last_gradients = {
+            "gradients": np.asarray(components, dtype=float),
+            "n_grad": n_grad,
+            "n_nodes": parcel_labels.size,
+            "projected_data": None,
+            "affine": None,
+            "header": None,
+            "source_name": source_name,
+            "source_dir": str(bundle["path"].parent),
+            "output_name": default_name,
+            "keep_indices": np.arange(parcel_labels.size, dtype=int),
+            "projection_labels": np.asarray(parcel_labels, dtype=int),
+            "support_mask": None,
+            "template_path": template_path_text,
+            "parcel_names": parcel_names,
+            "matrix_entry_id": None,
+            "matrix_label": bundle.get("label", ""),
+            "precomputed_source_path": str(bundle["path"]),
+            "precomputed_row_index": int(row_index),
+        }
+        self._set_gradients_progress(0, n_grad, n_grad, self._gradient_precomputed_selection_text())
+        self._sync_gradients_dialog_state()
+        self.statusBar().showMessage(
+            f"Loaded precomputed gradients for row {row_index}. No diffusion embedding or fsaverage projection was run; projection will happen only when needed."
+        )
 
     def _classification_scatter_edge_pairs(self, projection_labels, finite_mask):
         adjacency_data = self._gradient_classification_adjacency_data()
@@ -4750,9 +5330,32 @@ class ConnectomeViewer(QMainWindow):
                 else (names[0] if names else "spectrum_fsl")
             )
             self._gradient_colormap_name = current_cmap
+        precomputed_bundle = (
+            self._gradient_precomputed_bundle
+            if bool(self._gradient_use_precomputed_bundle) and isinstance(self._gradient_precomputed_bundle, dict)
+            else None
+        )
+        if precomputed_bundle is not None:
+            component_count = max(
+                1,
+                min(
+                    10,
+                    int(precomputed_bundle.get("component_count_total", self._current_gradient_component_count())),
+                ),
+            )
+            self._gradient_component_count = component_count
+            matrix_source = f"Precomputed gradients: {precomputed_bundle.get('label', 'bundle')}"
+        else:
+            component_count = self._current_gradient_component_count()
+            matrix_source = self._gradient_matrix_label_for_entry(selected_entry)
+
         dialog.set_matrix_options(matrix_options, selected_entry_id=selected_entry_id)
-        dialog.set_matrix_source(self._gradient_matrix_label_for_entry(selected_entry))
-        dialog.set_component_count(self._current_gradient_component_count())
+        dialog.set_matrix_source(matrix_source)
+        dialog.set_component_count(component_count)
+        dialog.set_surface_render_component_limit(self._available_gradient_network_component_count())
+        dialog.set_surface_render_component_count(self._selected_gradient_surface_render_count())
+        dialog.set_surface_procrustes_available(self._gradient_surface_procrustes_available())
+        dialog.set_surface_procrustes_enabled(self._selected_gradient_surface_procrustes())
         dialog.set_colormap_names(names, current_colormap=current_cmap)
         dialog.set_parcellation_path(self._active_parcellation_path)
         dialog.set_hemisphere_mode(self._selected_gradient_hemisphere_mode())
@@ -4772,6 +5375,13 @@ class ConnectomeViewer(QMainWindow):
             self._selected_gradient_classification_x_axis(),
             self._selected_gradient_classification_y_axis(),
         )
+        ignore_options = self._gradient_classification_ignore_parcel_options()
+        dialog.set_classification_ignore_parcel_options(
+            ignore_options.get("lh", []),
+            ignore_options.get("rh", []),
+            selected_lh=self._selected_gradient_classification_ignore_lh_parcel(),
+            selected_rh=self._selected_gradient_classification_ignore_rh_parcel(),
+        )
         dialog.set_classification_adjacency_path(self._gradient_classification_adjacency_path)
         dialog.set_network_component_options(
             self._available_gradient_network_component_count(),
@@ -4785,12 +5395,38 @@ class ConnectomeViewer(QMainWindow):
             progress["value"],
             progress["text"],
         )
-        dialog.set_can_compute(self._has_square_matrix_entry(selected_entry))
+        dialog.set_precomputed_mode(precomputed_bundle is not None)
+        if precomputed_bundle is not None:
+            row_payload = []
+            for row_index, row_data in enumerate(list(precomputed_bundle.get("covars_rows") or [])):
+                payload_row = {"__row_index__": row_index}
+                payload_row.update({str(key): _display_text(value) for key, value in dict(row_data).items()})
+                row_payload.append(payload_row)
+            dialog.set_precomputed_rows(
+                precomputed_bundle.get("covars_columns") or [],
+                row_payload,
+                selected_row=self._gradient_precomputed_selected_row,
+                summary_text=precomputed_bundle.get("summary", ""),
+                selection_text=self._gradient_precomputed_selection_text(),
+            )
+        else:
+            dialog.set_precomputed_rows([], [], selected_row=None, summary_text="", selection_text="")
+        dialog.set_can_compute(precomputed_bundle is None and self._has_square_matrix_entry(selected_entry))
         dialog.set_busy(self._gradients_busy)
         dialog.set_has_results(bool(self._last_gradients))
         dialog.set_can_classify(self._can_classify_gradients())
 
-    def _open_gradients_dialog(self) -> None:
+    def _open_gradients_dialog(self, *_args, prefer_precomputed=None) -> None:
+        has_matrix_entries = bool(self._available_gradient_matrix_entries())
+        has_precomputed_bundle = isinstance(self._gradient_precomputed_bundle, dict)
+        if bool(prefer_precomputed) and has_precomputed_bundle:
+            self._set_gradient_source_mode(True, reset_results=False)
+        elif has_matrix_entries:
+            self._set_gradient_source_mode(False, reset_results=False)
+        elif has_precomputed_bundle:
+            self._set_gradient_source_mode(True, reset_results=False)
+        else:
+            self._set_gradient_source_mode(False, reset_results=False)
         if getattr(self, "_gradients_dialog", None) is None:
             try:
                 from window.gradients_prepare import GradientsPrepareDialog
@@ -4818,6 +5454,8 @@ class ConnectomeViewer(QMainWindow):
                 colormap_changed_callback=self._on_gradient_colormap_changed,
                 hemisphere_changed_callback=self._on_gradient_hemisphere_changed,
                 surface_mesh_changed_callback=self._on_gradient_surface_mesh_changed,
+                surface_render_count_changed_callback=self._on_gradient_surface_render_count_changed,
+                surface_procrustes_changed_callback=self._on_gradient_surface_procrustes_changed,
                 classification_surface_mesh_changed_callback=self._on_gradient_classification_surface_mesh_changed,
                 classification_hemisphere_changed_callback=self._on_gradient_classification_hemisphere_changed,
                 scatter_rotation_changed_callback=self._on_gradient_scatter_rotation_changed,
@@ -4828,8 +5466,11 @@ class ConnectomeViewer(QMainWindow):
                 classification_component_changed_callback=self._on_gradient_classification_component_changed,
                 classification_x_axis_changed_callback=self._on_gradient_classification_x_axis_changed,
                 classification_y_axis_changed_callback=self._on_gradient_classification_y_axis_changed,
+                classification_ignore_lh_changed_callback=self._on_gradient_classification_ignore_lh_changed,
+                classification_ignore_rh_changed_callback=self._on_gradient_classification_ignore_rh_changed,
                 open_classification_adjacency_callback=self._select_gradient_classification_adjacency,
                 remove_classification_adjacency_callback=self._clear_gradient_classification_adjacency,
+                precomputed_row_confirm_callback=self._confirm_precomputed_gradient_row,
                 network_component_changed_callback=self._on_gradient_network_component_changed,
                 rotation_changed_callback=self._on_gradient_rotation_changed,
                 parent=self,
@@ -5316,6 +5957,7 @@ class ConnectomeViewer(QMainWindow):
     def _add_files(self, paths):
         added_paths = []
         added_any = False
+        loaded_precomputed_bundle = None
         for raw_path in paths:
             if not raw_path:
                 continue
@@ -5323,6 +5965,16 @@ class ConnectomeViewer(QMainWindow):
             if path.suffix.lower() != ".npz" or not path.exists():
                 continue
             self._invalidate_path_caches(path)
+            try:
+                precomputed_bundle = self._load_precomputed_gradient_bundle(path)
+            except Exception as exc:
+                self.statusBar().showMessage(
+                    f"Failed to load precomputed gradients from {path.name}: {exc}"
+                )
+                continue
+            if precomputed_bundle is not None:
+                loaded_precomputed_bundle = precomputed_bundle
+                continue
             entry_id = self._file_entry_id(path)
             if entry_id in self._entries:
                 continue
@@ -5346,8 +5998,12 @@ class ConnectomeViewer(QMainWindow):
         if added_any and self.file_list.currentItem() is None:
             self.file_list.setCurrentRow(self.file_list.count() - 1)
 
+        if loaded_precomputed_bundle is not None:
+            self._activate_precomputed_gradient_bundle(loaded_precomputed_bundle)
+
         if not added_any:
-            self.statusBar().showMessage("No valid .npz files added.")
+            if loaded_precomputed_bundle is None:
+                self.statusBar().showMessage("No valid .npz files added.")
         return added_paths
 
     def _remove_selected(self) -> None:
@@ -5372,6 +6028,9 @@ class ConnectomeViewer(QMainWindow):
         self._valid_keys_cache.clear()
         self._parcel_metadata_cache.clear()
         self._group_values_cache.clear()
+        self._gradient_precomputed_bundle = None
+        self._gradient_precomputed_selected_row = None
+        self._gradient_use_precomputed_bundle = False
         self.file_list.clear()
         self._clear_plot()
         self._update_nbs_prepare_button()
@@ -6733,9 +7392,12 @@ class ConnectomeViewer(QMainWindow):
         if not self._last_gradients:
             self.statusBar().showMessage("No projected gradients to save. Click Compute first.")
             return
-        projected_data = self._last_gradients.get("projected_data")
-        if projected_data is None:
-            self.statusBar().showMessage("No projected data available to save.")
+        try:
+            projected_data = self._ensure_projected_gradient_data(
+                int(self._last_gradients.get("n_grad", 1))
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"No projected data available to save: {exc}")
             return
 
         try:
@@ -6840,6 +7502,165 @@ class ConnectomeViewer(QMainWindow):
             raise RuntimeError("Parcellation template must be a 3D image.")
         return template_img, template_data
 
+    @staticmethod
+    def _projected_gradient_component_count(projected_data) -> int:
+        if projected_data is None:
+            return 0
+        array = np.asarray(projected_data)
+        if array.ndim == 3:
+            return 1
+        if array.ndim == 4:
+            return int(array.shape[3])
+        return 0
+
+    def _ensure_projected_gradient_data(self, required_components: int):
+        results = self._last_gradients or {}
+        if not results:
+            raise RuntimeError("No gradients are available.")
+
+        gradients = np.asarray(results.get("gradients"), dtype=float)
+        if gradients.ndim != 2 or gradients.shape[1] < 1:
+            raise RuntimeError("No gradient components are available.")
+
+        projection_labels = np.asarray(results.get("projection_labels"), dtype=int).reshape(-1)
+        if projection_labels.size != gradients.shape[0]:
+            raise RuntimeError("Gradient projection labels are out of sync with the node data.")
+
+        target_count = self._normalize_gradient_surface_render_count(
+            required_components,
+            max_components=gradients.shape[1],
+        )
+        projected_data = results.get("projected_data")
+        current_count = self._projected_gradient_component_count(projected_data)
+        if current_count >= target_count:
+            return projected_data
+
+        template_img, template_data = self._gradient_template_img_and_data()
+        results["affine"] = np.asarray(template_img.affine, dtype=float)
+        try:
+            results["header"] = template_img.header.copy()
+        except Exception:
+            results["header"] = None
+        if results.get("support_mask") is None:
+            results["support_mask"] = np.asarray(
+                np.isin(template_data, projection_labels),
+                dtype=np.float32,
+            )
+        projected_maps = []
+        if projected_data is not None and current_count > 0:
+            projected_array = np.asarray(projected_data, dtype=np.float32)
+            if projected_array.ndim == 3:
+                projected_maps.append(projected_array)
+            elif projected_array.ndim == 4:
+                projected_maps.extend(
+                    [np.asarray(projected_array[..., idx], dtype=np.float32) for idx in range(projected_array.shape[3])]
+                )
+
+        for comp_idx in range(current_count, target_count):
+            try:
+                projected = nettools.project_to_3dspace(
+                    np.asarray(gradients[:, comp_idx], dtype=float),
+                    template_data,
+                    projection_labels,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"Failed to project Gradient {comp_idx + 1}: {exc}") from exc
+            projected_maps.append(np.asarray(projected, dtype=np.float32))
+
+        if not projected_maps:
+            results["projected_data"] = None
+        elif len(projected_maps) == 1:
+            results["projected_data"] = projected_maps[0]
+        else:
+            results["projected_data"] = np.stack(projected_maps, axis=-1)
+        return results.get("projected_data")
+
+    def _surface_render_gradient_matrix(self, required_components: int, *, use_procrustes: bool = False):
+        results = self._last_gradients or {}
+        if not results:
+            raise RuntimeError("No gradients are available.")
+
+        gradients = np.asarray(results.get("gradients"), dtype=float)
+        if gradients.ndim != 2 or gradients.shape[1] < 1:
+            raise RuntimeError("No gradient components are available.")
+        target_count = self._normalize_gradient_surface_render_count(
+            required_components,
+            max_components=gradients.shape[1],
+        )
+        components = np.asarray(gradients[:, :target_count], dtype=float)
+        if not use_procrustes:
+            return components
+
+        bundle = self._gradient_precomputed_bundle
+        if not isinstance(bundle, dict):
+            return components
+        gradients_avg = bundle.get("gradients_avg")
+        if gradients_avg is None:
+            return components
+        gradients_avg = np.asarray(gradients_avg, dtype=float)
+        if gradients_avg.ndim != 2:
+            return components
+        if gradients_avg.shape[1] != components.shape[0]:
+            return components
+
+        try:
+            from brainspace.gradient.alignment import procrustes
+        except Exception as exc:
+            raise RuntimeError(f"brainspace procrustes is unavailable: {exc}") from exc
+
+        aligned = np.asarray(components, dtype=float).copy()
+        max_ref_components = min(aligned.shape[1], gradients_avg.shape[0])
+        for comp_idx in range(max_ref_components):
+            source = np.asarray(aligned[:, comp_idx], dtype=float).reshape(-1, 1)
+            target = np.asarray(gradients_avg[comp_idx], dtype=float).reshape(-1, 1)
+            try:
+                # Align the selected subject/session component onto the average reference.
+                aligned_component = procrustes(source, target, center=False, scale=False)
+            except Exception as exc:
+                raise RuntimeError(f"Failed Procrustes alignment for Gradient {comp_idx + 1}: {exc}") from exc
+            aligned[:, comp_idx] = np.asarray(aligned_component, dtype=float).reshape(-1)
+        return aligned
+
+    def _project_gradient_matrix_to_volume(self, gradient_matrix: np.ndarray):
+        results = self._last_gradients or {}
+        if not results:
+            raise RuntimeError("No gradients are available.")
+        components = np.asarray(gradient_matrix, dtype=float)
+        if components.ndim != 2 or components.shape[1] < 1:
+            raise RuntimeError("Gradient matrix must be 2D with at least one component.")
+
+        projection_labels = np.asarray(results.get("projection_labels"), dtype=int).reshape(-1)
+        if projection_labels.size != components.shape[0]:
+            raise RuntimeError("Gradient projection labels are out of sync with the node data.")
+
+        template_img, template_data = self._gradient_template_img_and_data()
+        results["affine"] = np.asarray(template_img.affine, dtype=float)
+        try:
+            results["header"] = template_img.header.copy()
+        except Exception:
+            results["header"] = None
+        if results.get("support_mask") is None:
+            results["support_mask"] = np.asarray(
+                np.isin(template_data, projection_labels),
+                dtype=np.float32,
+            )
+
+        projected_maps = []
+        for comp_idx in range(components.shape[1]):
+            try:
+                projected = nettools.project_to_3dspace(
+                    np.asarray(components[:, comp_idx], dtype=float),
+                    template_data,
+                    projection_labels,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"Failed to project Gradient {comp_idx + 1}: {exc}") from exc
+            projected_maps.append(np.asarray(projected, dtype=np.float32))
+
+        if len(projected_maps) == 1:
+            return projected_maps[0]
+        return np.stack(projected_maps, axis=-1)
+
     def _gradient_spatial_embedding(self):
         results = self._last_gradients or {}
         if not results:
@@ -6923,6 +7744,101 @@ class ConnectomeViewer(QMainWindow):
         results["spatial_embedding"] = cached
         return cached
 
+    def _classification_spatial_embedding(self, axis_gradients, *, align_to_gradients: bool = True):
+        spatial = dict(self._gradient_spatial_embedding() or {})
+        if not align_to_gradients:
+            return spatial
+
+        gradient_coords = np.asarray(axis_gradients, dtype=float)
+        spatial_coords = np.asarray(spatial.get("coords"), dtype=float)
+        projection_labels = np.asarray(spatial.get("projection_labels", []), dtype=int).reshape(-1)
+        if (
+            gradient_coords.ndim != 2
+            or spatial_coords.ndim != 2
+            or gradient_coords.shape[0] != spatial_coords.shape[0]
+            or spatial_coords.shape[1] != 2
+            or gradient_coords.shape[1] < 2
+        ):
+            return spatial
+
+        results = self._last_gradients or {}
+        cached = results.get("spatial_embedding_aligned")
+        if isinstance(cached, dict):
+            cached_labels = np.asarray(cached.get("projection_labels", []), dtype=int).reshape(-1)
+            cached_coords = np.asarray(cached.get("coords"), dtype=float)
+            if (
+                cached_labels.shape == projection_labels.shape
+                and np.array_equal(cached_labels, projection_labels)
+                and cached_coords.shape == spatial_coords.shape
+            ):
+                return cached
+
+        try:
+            from brainspace.gradient.alignment import procrustes
+        except Exception:
+            return spatial
+
+        target_coords = np.column_stack(
+            (
+                np.asarray(gradient_coords[:, 1], dtype=float),
+                np.asarray(gradient_coords[:, 0], dtype=float),
+            )
+        )
+        finite_mask = np.all(np.isfinite(spatial_coords), axis=1) & np.all(np.isfinite(target_coords), axis=1)
+        if int(np.sum(finite_mask)) < 3:
+            return spatial
+
+        aligned_coords = np.asarray(spatial_coords, dtype=float).copy()
+        try:
+            aligned_coords[finite_mask, :] = np.asarray(
+                procrustes(
+                    np.asarray(spatial_coords[finite_mask, :], dtype=float),
+                    np.asarray(target_coords[finite_mask, :], dtype=float),
+                    center=True,
+                    scale=False,
+                ),
+                dtype=float,
+            )
+        except Exception:
+            return spatial
+
+        try:
+            _template_img, template_data = self._gradient_template_img_and_data()
+            projected_x = np.asarray(
+                nettools.project_to_3dspace(aligned_coords[:, 0], template_data, projection_labels),
+                dtype=np.float32,
+            )
+            projected_y = np.asarray(
+                nettools.project_to_3dspace(aligned_coords[:, 1], template_data, projection_labels),
+                dtype=np.float32,
+            )
+        except Exception:
+            return spatial
+
+        aligned = {
+            **spatial,
+            "coords": np.asarray(aligned_coords, dtype=float),
+            "projected_x": projected_x,
+            "projected_y": projected_y,
+            "aligned_to_gradients": True,
+        }
+        results["spatial_embedding_aligned"] = aligned
+        return aligned
+
+    @staticmethod
+    def _classification_spatial_indices(x_axis: str, y_axis: str):
+        x_norm = ConnectomeViewer._normalize_gradient_classification_axis(x_axis, default="gradient1")
+        y_norm = ConnectomeViewer._normalize_gradient_classification_axis(y_axis, default="gradient1")
+        if x_norm == "spatial" and y_norm == "spatial":
+            return 0, 1, "Spatial 1", "Spatial 2"
+        if x_norm == "spatial":
+            x_index = 1 if y_norm == "gradient2" else 0
+            return x_index, 0, "Spatial", "Spatial"
+        if y_norm == "spatial":
+            y_index = 1 if x_norm == "gradient2" else 0
+            return 0, y_index, "Spatial", "Spatial"
+        return 0, 0, "Spatial", "Spatial"
+
     def _classification_axis_payload(
         self,
         axis_key: str,
@@ -6931,6 +7847,7 @@ class ConnectomeViewer(QMainWindow):
         *,
         spatial_index: int = 0,
         spatial_label: str = "Spatial",
+        spatial_embedding_override=None,
     ):
         axis = self._normalize_gradient_classification_axis(axis_key, default="gradient1")
         if axis == "gradient1":
@@ -6948,7 +7865,11 @@ class ConnectomeViewer(QMainWindow):
                 raise RuntimeError("Projected Gradient 2 volume is not available.")
             return np.asarray(gradients[:, 1], dtype=float), np.asarray(projected_data[..., 1], dtype=float), "Gradient 2"
 
-        spatial = self._gradient_spatial_embedding()
+        spatial = (
+            dict(spatial_embedding_override)
+            if isinstance(spatial_embedding_override, dict)
+            else self._gradient_spatial_embedding()
+        )
         coord_index = max(0, min(int(spatial_index), 1))
         volume_key = "projected_x" if coord_index == 0 else "projected_y"
         return (
@@ -6957,13 +7878,43 @@ class ConnectomeViewer(QMainWindow):
             str(spatial_label or ("Spatial 1" if coord_index == 0 else "Spatial 2")),
         )
 
+    @staticmethod
+    def _rescale_classification_axis_to_range(values, volume, target_values):
+        axis_values = np.asarray(values, dtype=float)
+        axis_volume = np.asarray(volume, dtype=float)
+        target = np.asarray(target_values, dtype=float)
+
+        finite_axis = axis_values[np.isfinite(axis_values)]
+        finite_target = target[np.isfinite(target)]
+        if finite_axis.size == 0 or finite_target.size == 0:
+            return axis_values, axis_volume
+
+        src_min = float(np.min(finite_axis))
+        src_max = float(np.max(finite_axis))
+        tgt_min = float(np.min(finite_target))
+        tgt_max = float(np.max(finite_target))
+        if not all(np.isfinite(value) for value in (src_min, src_max, tgt_min, tgt_max)):
+            return axis_values, axis_volume
+
+        scaled_values = np.array(axis_values, copy=True, dtype=float)
+        scaled_volume = np.array(axis_volume, copy=True, dtype=float)
+        finite_values_mask = np.isfinite(scaled_values)
+        finite_volume_mask = np.isfinite(scaled_volume)
+
+        if abs(src_max - src_min) <= 1e-12:
+            midpoint = 0.5 * (tgt_min + tgt_max)
+            scaled_values[finite_values_mask] = midpoint
+            scaled_volume[finite_volume_mask] = midpoint
+            return scaled_values, scaled_volume
+
+        scale = (tgt_max - tgt_min) / (src_max - src_min)
+        scaled_values[finite_values_mask] = (scaled_values[finite_values_mask] - src_min) * scale + tgt_min
+        scaled_volume[finite_volume_mask] = (scaled_volume[finite_volume_mask] - src_min) * scale + tgt_min
+        return scaled_values, scaled_volume
+
     def _render_gradients_3d(self) -> None:
         if not self._last_gradients:
             self.statusBar().showMessage("No gradients computed yet.")
-            return
-        projected_data = self._last_gradients.get("projected_data")
-        if projected_data is None:
-            self.statusBar().showMessage("No projected fsaverage data available. Compute gradients again.")
             return
         try:
             from window.plot_gradient import GradientSurfaceDialog
@@ -6974,15 +7925,39 @@ class ConnectomeViewer(QMainWindow):
                 self.statusBar().showMessage(f"Gradient surface viewer unavailable: {exc}")
                 return
         try:
-            n_grad = int(self._last_gradients.get("n_grad", 1))
+            available_n_grad = int(self._last_gradients.get("n_grad", 1))
+            render_count = self._selected_gradient_surface_render_count()
+            render_count = max(1, min(render_count, available_n_grad))
+            use_procrustes = self._selected_gradient_surface_procrustes()
+            if use_procrustes:
+                component_matrix = self._surface_render_gradient_matrix(
+                    render_count,
+                    use_procrustes=True,
+                )
+                projected_data = self._project_gradient_matrix_to_volume(component_matrix)
+            else:
+                projected_data = self._ensure_projected_gradient_data(render_count)
+            if projected_data is None:
+                raise RuntimeError("No projected fsaverage data are available.")
+            render_data = np.asarray(projected_data, dtype=float)
+            if render_count == 1 and render_data.ndim == 4:
+                render_data = np.asarray(render_data[..., 0], dtype=float)
+            elif render_data.ndim == 4 and render_data.shape[3] > render_count:
+                render_data = render_data[..., :render_count]
             source_name = self._last_gradients.get("source_name", "matrix")
             cmap_name = self._selected_surface_colormap_name()
             cmap = self._selected_surface_colormap()
             hemisphere_mode = self._selected_gradient_hemisphere_mode()
             surface_mesh = self._selected_gradient_surface_mesh()
-            title = f"Gradient components ({n_grad}) - {source_name}"
+            title = (
+                f"Gradient 1 - {source_name}"
+                if render_count == 1
+                else f"First {render_count} Gradients - {source_name}"
+            )
+            if use_procrustes:
+                title += " | Procrustes to gradients_avg"
             self._surface_dialog = GradientSurfaceDialog.from_array(
-                projected_data,
+                render_data,
                 affine=self._last_gradients.get("affine"),
                 title=title,
                 cmap=cmap,
@@ -6996,10 +7971,10 @@ class ConnectomeViewer(QMainWindow):
             if screen is not None:
                 geom = screen.availableGeometry()
                 width = max(int(geom.width() * 0.88), 900)
-                height = min(max(300 + 300 * max(n_grad, 1), 420), int(geom.height() * 0.9))
+                height = min(max(300 + 300 * max(render_count, 1), 420), int(geom.height() * 0.9))
             else:
                 width = 1500
-                height = 300 + 300 * max(n_grad, 1)
+                height = 300 + 300 * max(render_count, 1)
             self._surface_dialog.resize(width, height)
             self._surface_dialog.show()
         except Exception as exc:
@@ -7010,11 +7985,6 @@ class ConnectomeViewer(QMainWindow):
     def _classify_gradients_fsaverage(self) -> None:
         if not self._last_gradients:
             self.statusBar().showMessage("No gradients computed yet.")
-            return
-
-        projected_data = self._last_gradients.get("projected_data")
-        if projected_data is None:
-            self.statusBar().showMessage("No projected fsaverage data available. Compute gradients again.")
             return
 
         gradients = np.asarray(self._last_gradients.get("gradients"), dtype=float)
@@ -7045,6 +8015,7 @@ class ConnectomeViewer(QMainWindow):
         try:
             source_name = self._last_gradients.get("source_name", "matrix")
             hemisphere_mode = self._selected_gradient_classification_hemisphere_mode()
+            surface_hemisphere_mode = "both" if hemisphere_mode == "separate" else hemisphere_mode
             surface_mesh = self._selected_gradient_classification_surface_mesh()
             scatter_rotation = self._selected_gradient_scatter_rotation()
             use_triangular_rgb = self._selected_gradient_triangular_rgb()
@@ -7052,11 +8023,10 @@ class ConnectomeViewer(QMainWindow):
             triangular_color_order = self._selected_gradient_triangular_color_order()
             x_axis = self._selected_gradient_classification_x_axis()
             y_axis = self._selected_gradient_classification_y_axis()
-            both_spatial = x_axis == "spatial" and y_axis == "spatial"
-            x_spatial_index = 0
-            y_spatial_index = 1 if both_spatial else 0
-            x_spatial_label = "Spatial 1" if both_spatial else "Spatial"
-            y_spatial_label = "Spatial 2" if both_spatial else "Spatial"
+            x_spatial_index, y_spatial_index, x_spatial_label, y_spatial_label = self._classification_spatial_indices(
+                x_axis,
+                y_axis,
+            )
             class_component = int(
                 self._normalize_gradient_classification_component(
                     self._selected_gradient_classification_component(),
@@ -7064,15 +8034,30 @@ class ConnectomeViewer(QMainWindow):
                 )
             ) - 1
             class_component = max(0, min(class_component, gradients.shape[1] - 1))
+            required_projection_count = 1
+            if x_axis == "gradient2" or y_axis == "gradient2":
+                required_projection_count = max(required_projection_count, 2)
+            if not use_triangular_rgb:
+                required_projection_count = max(required_projection_count, class_component + 1)
+            projected_data = self._ensure_projected_gradient_data(required_projection_count)
+            if projected_data is None:
+                raise RuntimeError("No projected fsaverage data are available for classification.")
             classification_cmap_name = self._selected_gradient_classification_colormap()
             classification_cmap = self._selected_surface_colormap(classification_cmap_name)
             axis_gradients = np.asarray(gradients[keep_indices, :], dtype=float)
+            spatial_embedding_override = None
+            if x_axis == "spatial" or y_axis == "spatial":
+                spatial_embedding_override = self._classification_spatial_embedding(
+                    axis_gradients,
+                    align_to_gradients=True,
+                )
             x_values, x_volume, x_label = self._classification_axis_payload(
                 x_axis,
                 axis_gradients,
                 projected_data,
                 spatial_index=x_spatial_index,
                 spatial_label=x_spatial_label,
+                spatial_embedding_override=spatial_embedding_override,
             )
             y_values, y_volume, y_label = self._classification_axis_payload(
                 y_axis,
@@ -7080,7 +8065,20 @@ class ConnectomeViewer(QMainWindow):
                 projected_data,
                 spatial_index=y_spatial_index,
                 spatial_label=y_spatial_label,
+                spatial_embedding_override=spatial_embedding_override,
             )
+            if x_axis == "spatial" and y_axis in {"gradient1", "gradient2"}:
+                x_values, x_volume = self._rescale_classification_axis_to_range(
+                    x_values,
+                    x_volume,
+                    y_values,
+                )
+            if y_axis == "spatial" and x_axis in {"gradient1", "gradient2"}:
+                y_values, y_volume = self._rescale_classification_axis_to_range(
+                    y_values,
+                    y_volume,
+                    x_values,
+                )
             class_component_values = np.asarray(axis_gradients[:, class_component], dtype=float)
             finite_mask = np.isfinite(x_values) & np.isfinite(y_values) & np.isfinite(class_component_values)
             if not np.any(finite_mask):
@@ -7111,6 +8109,29 @@ class ConnectomeViewer(QMainWindow):
                     label_text = f"Parcel {int(label)}"
                 point_labels.append(label_text)
             point_labels = np.asarray(point_labels, dtype=object)
+            hemisphere_codes_full = np.asarray(self._gradient_projection_hemisphere_codes(), dtype=int).reshape(-1)
+            if hemisphere_codes_full.shape != projection_labels.shape:
+                raise RuntimeError("Hemisphere membership is out of sync with the projected labels.")
+
+            ignore_lh_name = self._selected_gradient_classification_ignore_lh_parcel()
+            ignore_rh_name = self._selected_gradient_classification_ignore_rh_parcel()
+            if ignore_lh_name or ignore_rh_name:
+                ignore_mask = np.zeros(projection_labels.shape, dtype=bool)
+                normalized_labels = np.asarray([str(text or "").strip().lower() for text in point_labels.tolist()], dtype=object)
+                if ignore_lh_name:
+                    target = str(ignore_lh_name).strip().lower()
+                    ignore_mask |= ((hemisphere_codes_full == 0) | (hemisphere_codes_full == 2)) & (normalized_labels == target)
+                if ignore_rh_name:
+                    target = str(ignore_rh_name).strip().lower()
+                    ignore_mask |= ((hemisphere_codes_full == 1) | (hemisphere_codes_full == 2)) & (normalized_labels == target)
+                finite_mask &= ~ignore_mask
+            else:
+                ignore_mask = np.zeros(projection_labels.shape, dtype=bool)
+            if not np.any(finite_mask):
+                self.statusBar().showMessage(
+                    f"No parcels remain for {y_label} vs {x_label} after applying the ignore-parcel selection."
+                )
+                return
             scatter_title = f"{y_label} vs {x_label} - {source_name}"
         except Exception as exc:
             self.statusBar().showMessage(f"Failed to prepare classification axes: {exc}")
@@ -7131,10 +8152,70 @@ class ConnectomeViewer(QMainWindow):
         try:
             scatter_projection_labels = np.asarray(projection_labels[finite_mask], dtype=int)
             scatter_point_labels = np.asarray(point_labels[finite_mask], dtype=object)
-            scatter_hemisphere_codes = np.asarray(
-                self._gradient_projection_hemisphere_codes()[finite_mask],
-                dtype=int,
-            )
+            scatter_hemisphere_codes = np.asarray(hemisphere_codes_full[finite_mask], dtype=int)
+            scatter_export_metadata = {
+                "source_name": source_name,
+                "source_dir": str(self._last_gradients.get("source_dir", self._default_results_dir())),
+                "parc_path": str(self._last_gradients.get("template_path", "") or ""),
+                "template_path": str(self._last_gradients.get("template_path", "") or ""),
+                "adjacency_path": str(self._gradient_classification_adjacency_path or ""),
+                "gradient1_values": np.asarray(axis_gradients[:, 0], dtype=float)[finite_mask],
+                "gradient2_values": (
+                    np.asarray(axis_gradients[:, 1], dtype=float)[finite_mask]
+                    if axis_gradients.ndim == 2 and axis_gradients.shape[1] >= 2
+                    else np.full(scatter_projection_labels.shape, np.nan, dtype=float)
+                ),
+            }
+            gradients_pair_export = np.full((scatter_projection_labels.size, 2), np.nan, dtype=float)
+            if axis_gradients.ndim == 2 and axis_gradients.shape[1] >= 1:
+                gradients_pair_export[:, 0] = np.asarray(axis_gradients[:, 0], dtype=float)[finite_mask]
+            if axis_gradients.ndim == 2 and axis_gradients.shape[1] >= 2:
+                gradients_pair_export[:, 1] = np.asarray(axis_gradients[:, 1], dtype=float)[finite_mask]
+            scatter_export_metadata["gradients_pair"] = gradients_pair_export
+
+            gradients_avg_export = np.empty((0, 0), dtype=float)
+            bundle = self._gradient_precomputed_bundle
+            if isinstance(bundle, dict):
+                gradients_avg_raw = bundle.get("gradients_avg")
+                if gradients_avg_raw is not None:
+                    gradients_avg_array = np.asarray(gradients_avg_raw, dtype=float)
+                    if gradients_avg_array.ndim == 2 and gradients_avg_array.shape[1] == finite_mask.shape[0]:
+                        gradients_avg_export = np.asarray(gradients_avg_array[:, finite_mask], dtype=float)
+            scatter_export_metadata["gradients_avg"] = gradients_avg_export
+
+            covars_row = {}
+            participant = ""
+            session = ""
+            group_value = ""
+            modality_value = ""
+            precomputed_row_index = self._last_gradients.get("precomputed_row_index", None)
+            if isinstance(bundle, dict) and precomputed_row_index is not None:
+                try:
+                    row_index = int(precomputed_row_index)
+                    participant, session = self._gradient_precomputed_row_pair(bundle, row_index)
+                    bundle_rows = list(bundle.get("covars_rows") or [])
+                    if 0 <= row_index < len(bundle_rows) and isinstance(bundle_rows[row_index], dict):
+                        covars_row = dict(bundle_rows[row_index])
+                except Exception:
+                    covars_row = {}
+                group_value = str(covars_row.get("group", "") or "").strip()
+                modality_value = str(covars_row.get("modality", "") or "").strip()
+            else:
+                entry_id = self._last_gradients.get("matrix_entry_id")
+                entry = self._entries.get(entry_id) if entry_id in self._entries else None
+                source_path = self._gradient_entry_source_path(entry)
+                if source_path is not None and source_path.exists():
+                    try:
+                        with np.load(source_path, allow_pickle=True) as npz:
+                            group_value = self._npz_optional_scalar_text(npz, "group")
+                            modality_value = self._npz_optional_scalar_text(npz, "modality")
+                    except Exception:
+                        pass
+            scatter_export_metadata["subject_id"] = participant
+            scatter_export_metadata["session_id"] = session
+            scatter_export_metadata["group"] = group_value
+            scatter_export_metadata["modality"] = modality_value
+            scatter_export_metadata["covars_row"] = covars_row
 
             def _project_paths_callback(payload):
                 self._project_classification_paths_to_brain(
@@ -7151,6 +8232,7 @@ class ConnectomeViewer(QMainWindow):
                 x_values[finite_mask],
                 y_values[finite_mask],
                 color_values=class_component_values[finite_mask],
+                gradient1_values=np.asarray(axis_gradients[:, 0], dtype=float)[finite_mask],
                 point_labels=point_labels[finite_mask],
                 point_ids=scatter_projection_labels,
                 title=scatter_title,
@@ -7166,7 +8248,9 @@ class ConnectomeViewer(QMainWindow):
                 triangular_color_order=triangular_color_order,
                 edge_pairs=edge_pairs,
                 point_group_codes=scatter_hemisphere_codes,
+                hemisphere_mode=hemisphere_mode,
                 project_paths_callback=_project_paths_callback,
+                export_metadata=scatter_export_metadata,
                 parent=self,
             )
             self._gradient_scatter_dialog.resize(860, 760)
@@ -7175,6 +8259,20 @@ class ConnectomeViewer(QMainWindow):
             scatter_error = str(exc)
 
         try:
+            support_mask_data = self._last_gradients.get("support_mask")
+            if np.any(ignore_mask):
+                ignored_labels = np.asarray(projection_labels[ignore_mask], dtype=int)
+                if ignored_labels.size > 0:
+                    _template_img, template_data = self._gradient_template_img_and_data()
+                    ignored_voxels = np.isin(np.asarray(template_data, dtype=int), ignored_labels)
+                    x_volume = np.asarray(x_volume, dtype=float).copy()
+                    y_volume = np.asarray(y_volume, dtype=float).copy()
+                    x_volume[ignored_voxels] = np.nan
+                    y_volume[ignored_voxels] = np.nan
+                    if support_mask_data is not None:
+                        support_mask_data = np.asarray(support_mask_data, dtype=float).copy()
+                        support_mask_data[ignored_voxels] = 0.0
+
             if use_triangular_rgb:
                 self._gradient_classification_dialog = GradientClassificationDialog.from_array(
                     x_volume,
@@ -7182,12 +8280,12 @@ class ConnectomeViewer(QMainWindow):
                     affine=self._last_gradients.get("affine"),
                     x_values=x_values[finite_mask],
                     y_values=y_values[finite_mask],
-                    support_mask_data=self._last_gradients.get("support_mask"),
+                    support_mask_data=support_mask_data,
                     title=f"{y_label} vs {x_label} Classification - {source_name}",
                     x_label=x_label,
                     y_label=y_label,
                     theme_name=self._theme_name,
-                    hemisphere_mode=hemisphere_mode,
+                    hemisphere_mode=surface_hemisphere_mode,
                     fsaverage_mesh=surface_mesh,
                     rotation_preset=scatter_rotation,
                     rgb_fit_mode=classification_fit_mode,
@@ -7199,6 +8297,13 @@ class ConnectomeViewer(QMainWindow):
                     classification_projection = np.asarray(projected_data[..., class_component], dtype=float)
                 else:
                     classification_projection = np.asarray(projected_data, dtype=float)
+                if np.any(ignore_mask):
+                    ignored_labels = np.asarray(projection_labels[ignore_mask], dtype=int)
+                    if ignored_labels.size > 0:
+                        _template_img, template_data = self._gradient_template_img_and_data()
+                        ignored_voxels = np.isin(np.asarray(template_data, dtype=int), ignored_labels)
+                        classification_projection = np.asarray(classification_projection, dtype=float).copy()
+                        classification_projection[ignored_voxels] = np.nan
                 self._gradient_classification_dialog = GradientSurfaceDialog.from_array(
                     classification_projection,
                     affine=self._last_gradients.get("affine"),
@@ -7206,7 +8311,7 @@ class ConnectomeViewer(QMainWindow):
                     cmap=classification_cmap,
                     cmap_name=classification_cmap_name,
                     theme_name=self._theme_name,
-                    hemisphere_mode=hemisphere_mode,
+                    hemisphere_mode=surface_hemisphere_mode,
                     fsaverage_mesh=surface_mesh,
                     parent=self,
                 )
@@ -7349,6 +8454,21 @@ class ConnectomeViewer(QMainWindow):
             }
             return np.asarray(mapping.get(str(channel).strip().upper(), (0.5, 0.5, 0.5)), dtype=float)
 
+        def _pair_channel_color(first, second):
+            pair = frozenset((str(first).strip().upper(), str(second).strip().upper()))
+            mapping = {
+                frozenset(("R", "B")): np.asarray((0.58, 0.28, 0.82), dtype=float),  # violet
+                frozenset(("R", "G")): np.asarray((1.00, 0.55, 0.00), dtype=float),  # orange
+                frozenset(("G", "B")): np.asarray((0.10, 0.76, 0.72), dtype=float),  # turquoise
+            }
+            if pair in mapping:
+                return np.asarray(mapping[pair], dtype=float)
+            return np.clip(
+                0.5 * (_rgb_basis_color(first) + _rgb_basis_color(second)),
+                0.0,
+                1.0,
+            )
+
         channel_order = [
             str(channel)
             for channel in str(project_payload.get("channel_order", "")).strip()
@@ -7429,11 +8549,7 @@ class ConnectomeViewer(QMainWindow):
                 return []
 
             def _record(first, second, segment_nodes):
-                color = np.clip(
-                    0.5 * (_rgb_basis_color(first) + _rgb_basis_color(second)),
-                    0.0,
-                    1.0,
-                )
+                color = _pair_channel_color(first, second)
                 return {
                     "nodes": [int(node) for node in list(segment_nodes or [])],
                     "color": color,
@@ -7573,7 +8689,8 @@ class ConnectomeViewer(QMainWindow):
         try:
             netplot = NetPlot(window)
             netplot.scene.background((1, 1, 1))
-            brain_hemi = None if self._normalize_gradient_hemisphere_mode(hemisphere_mode) == "both" else hemisphere_mode
+            normalized_hemisphere_mode = self._normalize_gradient_hemisphere_mode(hemisphere_mode)
+            brain_hemi = None if normalized_hemisphere_mode in {"both", "separate"} else normalized_hemisphere_mode
             netplot.add_brain(
                 netplot.mni_template,
                 hemisphere=brain_hemi,
@@ -7763,7 +8880,7 @@ class ConnectomeViewer(QMainWindow):
             hemisphere_mode,
             projection_labels,
         )
-        brain_hemi = None if hemisphere_mode == "both" else hemisphere_mode
+        brain_hemi = None if hemisphere_mode in {"both", "separate"} else hemisphere_mode
 
         for panel_idx, comp_idx in enumerate(component_indices):
             component_values = np.asarray(gradients[keep_indices, comp_idx], dtype=float)
