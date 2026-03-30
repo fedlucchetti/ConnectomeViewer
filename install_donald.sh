@@ -490,6 +490,7 @@ ensure_conda_env() {
       echo "Fix the conda error above and re-run install_donald.sh." >&2
       exit 1
     fi
+    echo "Updated '${ENV_NAME}' with Donald runtime dependencies, including hammer edge bundling and gradient dependencies (datashader, dask, scikit-image, brainspace)."
   else
     echo "Creating conda env '${ENV_NAME}' from ${ENV_FILE_PATH} ..."
     if ! conda env create -n "${ENV_NAME}" -f "${ENV_FILE_PATH}"; then
@@ -498,6 +499,7 @@ ensure_conda_env() {
       echo "Fix the conda error above and re-run install_donald.sh." >&2
       exit 1
     fi
+    echo "Created '${ENV_NAME}' with Donald runtime dependencies, including hammer edge bundling and gradient dependencies (datashader, dask, scikit-image, brainspace)."
   fi
 }
 
@@ -652,6 +654,9 @@ install_launcher() {
 #!/usr/bin/env bash
 set -euo pipefail
 APP_PATH="${APP_PATH}"
+REPO_DIR="${BASE_DIR}"
+INSTALL_SCRIPT="${BASE_DIR}/install_donald.sh"
+ENV_FILE="${ENV_FILE_PATH}"
 ENV_NAME="${ENV_NAME}"
 CONDA_HINT="${conda_hint}"
 CONDA_BASE_HINT="${conda_base_hint}"
@@ -699,6 +704,53 @@ choose_conda_bin() {
   done
   return 1
 }
+
+run_update() {
+  local repo_root conda_bin dirty_status
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git is required for 'donald update'." >&2
+    exit 1
+  fi
+  if ! repo_root="\$(git -C "\${REPO_DIR}" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "Donald update requires a git checkout at \${REPO_DIR}." >&2
+    exit 1
+  fi
+
+  dirty_status="\$(git -C "\${repo_root}" status --porcelain --untracked-files=no)"
+  if [[ -n "\${dirty_status}" ]]; then
+    echo "Refusing to update because \${repo_root} has local tracked modifications." >&2
+    echo "Commit, stash, or discard them, then run: donald update" >&2
+    exit 1
+  fi
+
+  echo "Pulling latest changes in \${repo_root} ..."
+  git -C "\${repo_root}" pull --ff-only
+
+  if [[ ! -f "\${ENV_FILE}" ]]; then
+    echo "Environment file not found: \${ENV_FILE}" >&2
+    exit 1
+  fi
+  if ! conda_bin="\$(choose_conda_bin)"; then
+    echo "Unable to update Donald: conda was not found." >&2
+    exit 1
+  fi
+
+  echo "Updating conda env '\${ENV_NAME}' from \${ENV_FILE} ..."
+  "\${conda_bin}" env update -n "\${ENV_NAME}" -f "\${ENV_FILE}" --prune
+
+  if [[ -f "\${INSTALL_SCRIPT}" ]]; then
+    echo "Refreshing Donald launcher ..."
+    bash "\${INSTALL_SCRIPT}" --env-name "\${ENV_NAME}" --skip-env --skip-data --skip-desktop --non-interactive
+  fi
+  echo "Donald update complete."
+}
+
+if [[ "\${1:-}" == "update" ]]; then
+  shift
+  run_update "\$@"
+  exit 0
+fi
 
 CONDA_BIN=""
 if CONDA_BIN="\$(choose_conda_bin)"; then

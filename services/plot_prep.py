@@ -8,6 +8,14 @@ from pathlib import Path
 
 import numpy as np
 
+from .display_state import (
+    default_entry_display_settings,
+    ensure_entry_display_settings,
+    log_scale_error,
+    normalize_display_scale,
+    parse_display_limits,
+)
+
 
 @dataclass
 class PlotEntryResolution:
@@ -16,95 +24,6 @@ class PlotEntryResolution:
     source_path: Path | None
     stack_axis: int | None
     stack_len: int | None
-
-
-def default_entry_display_settings(default_matrix_colormap: str) -> dict:
-    return {
-        "matrix_colormap": str(default_matrix_colormap or ""),
-        "display_auto": True,
-        "display_min_text": "",
-        "display_max_text": "",
-        "display_scale": "linear",
-    }
-
-
-def normalize_display_scale(choice) -> str:
-    text = str(choice or "").strip().lower()
-    if text.startswith("log"):
-        return "log"
-    return "linear"
-
-
-def ensure_entry_display_settings(
-    entry,
-    *,
-    default_matrix_colormap: str,
-    available_colormap_names,
-    fallback_colormap: str,
-):
-    if entry is None:
-        return None
-    defaults = default_entry_display_settings(default_matrix_colormap)
-    names = list(available_colormap_names or [])
-    cmap_name = str(entry.get("matrix_colormap", defaults["matrix_colormap"]) or "").strip()
-    if not cmap_name or (names and cmap_name not in names):
-        if defaults["matrix_colormap"] in names:
-            cmap_name = defaults["matrix_colormap"]
-        elif fallback_colormap in names:
-            cmap_name = fallback_colormap
-        elif names:
-            cmap_name = names[0]
-        else:
-            cmap_name = defaults["matrix_colormap"]
-    entry["matrix_colormap"] = cmap_name
-    entry["display_auto"] = bool(entry.get("display_auto", defaults["display_auto"]))
-    entry["display_min_text"] = str(entry.get("display_min_text", defaults["display_min_text"]) or "").strip()
-    entry["display_max_text"] = str(entry.get("display_max_text", defaults["display_max_text"]) or "").strip()
-    entry["display_scale"] = normalize_display_scale(entry.get("display_scale", defaults["display_scale"]))
-    return entry
-
-
-def parse_display_limits(*, auto_scale: bool, min_text: str = "", max_text: str = ""):
-    if auto_scale:
-        return None, None, None
-    min_value = None
-    max_value = None
-    min_text = str(min_text or "").strip()
-    max_text = str(max_text or "").strip()
-    if min_text:
-        try:
-            min_value = float(min_text)
-        except ValueError:
-            return None, None, "Display min must be numeric."
-    if max_text:
-        try:
-            max_value = float(max_text)
-        except ValueError:
-            return None, None, "Display max must be numeric."
-    if min_value is not None and max_value is not None and min_value >= max_value:
-        return None, None, "Display min must be smaller than max."
-    return min_value, max_value, None
-
-
-def log_scale_error(matrix, vmin, vmax):
-    if matrix is None:
-        return "Log scale requires matrix values."
-    values = np.asarray(matrix, dtype=float)
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        return "Log scale requires finite values."
-    max_val = float(np.max(finite))
-    if max_val <= 0:
-        return "Log scale requires positive values (max > 0)."
-    min_val = float(np.min(finite))
-    if min_val < 0:
-        return "Log scale does not support negative values."
-    if vmin is not None and vmin <= 0:
-        return "Display min must be > 0 for log scale."
-    if vmax is not None and vmax <= 0:
-        return "Display max must be > 0 for log scale."
-    return None
-
 
 def resolve_entry_plot(
     entry,

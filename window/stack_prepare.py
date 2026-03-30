@@ -76,6 +76,18 @@ except Exception:
     QT_LIB = 5
 
 
+try:
+    from window.shared.theme import (
+        switch_checkbox_theme_styles as _switch_checkbox_theme_styles,
+        workflow_dialog_stylesheet as _workflow_dialog_stylesheet,
+    )
+except Exception:
+    from mrsi_viewer.window.shared.theme import (
+        switch_checkbox_theme_styles as _switch_checkbox_theme_styles,
+        workflow_dialog_stylesheet as _workflow_dialog_stylesheet,
+    )
+
+
 if QT_LIB == 6:
     Qt.Checked = Qt.CheckState.Checked
     Qt.Unchecked = Qt.CheckState.Unchecked
@@ -2130,57 +2142,11 @@ class StackPrepareDialog(QWidget):
         super().closeEvent(event)
 
     def set_theme(self, theme_name):
-        theme = str(theme_name or "Dark").strip().title()
-        if theme not in {"Light", "Dark", "Teya", "Donald"}:
-            theme = "Dark"
+        theme, style = _workflow_dialog_stylesheet(
+            theme_name,
+            control_selector="QPushButton, QComboBox, QLineEdit, QTableWidget, QPlainTextEdit",
+        )
         self._theme_name = theme
-        if theme == "Dark":
-            style = (
-                "QWidget { background: #1f2430; color: #e5e7eb; font-size: 11pt; } "
-                "QPushButton, QComboBox, QLineEdit, QTableWidget, QPlainTextEdit { "
-                "background: #2a3140; color: #e5e7eb; border: 1px solid #556070; border-radius: 5px; } "
-                "QPushButton { min-height: 30px; padding: 4px 10px; } "
-                "QPushButton:hover { background: #344054; } "
-                "QLineEdit, QComboBox { min-height: 30px; padding: 2px 4px; } "
-                "QHeaderView::section { background: #2d3646; color: #e5e7eb; border: 1px solid #556070; } "
-                "QTableWidget::item:selected { background: #3b82f6; color: #ffffff; }"
-            )
-            style += _switch_checkbox_style("#485569", "#22c55e", "#556070")
-        elif theme == "Teya":
-            style = (
-                "QWidget { background: #ffd0e5; color: #0b7f7a; font-size: 11pt; } "
-                "QPushButton, QComboBox, QLineEdit, QTableWidget, QPlainTextEdit { "
-                "background: #ffe6f1; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 5px; } "
-                "QPushButton { min-height: 30px; padding: 4px 10px; } "
-                "QPushButton:hover { background: #ffd9ea; } "
-                "QLineEdit, QComboBox { min-height: 30px; padding: 2px 4px; } "
-                "QHeaderView::section { background: #ffc4df; color: #0b7f7a; border: 1px solid #1db8b2; } "
-                "QTableWidget::item:selected { background: #2ecfc9; color: #073f3c; }"
-            )
-            style += _switch_checkbox_style("#f6a9cb", "#2ecfc9", "#1db8b2")
-        elif theme == "Donald":
-            style = (
-                "QWidget { background: #a64b00; color: #ffffff; font-size: 11pt; } "
-                "QPushButton, QComboBox, QLineEdit, QTableWidget, QPlainTextEdit { "
-                "background: #c96a04; color: #ffffff; border: 1px solid #f3a451; border-radius: 5px; } "
-                "QPushButton { min-height: 30px; padding: 4px 10px; } "
-                "QPushButton:hover { background: #db7a13; } "
-                "QLineEdit, QComboBox { min-height: 30px; padding: 2px 4px; } "
-                "QHeaderView::section { background: #c96a04; color: #ffffff; border: 1px solid #f3a451; } "
-                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
-            )
-            style += _switch_checkbox_style("#d97706", "#2563eb", "#f3a451")
-        else:
-            style = (
-                "QWidget { background: #f5f7fb; color: #1f2937; font-size: 11pt; } "
-                "QPushButton, QComboBox, QLineEdit, QTableWidget, QPlainTextEdit { "
-                "background: #ffffff; color: #1f2937; border: 1px solid #c9d0da; border-radius: 5px; } "
-                "QPushButton { min-height: 30px; padding: 4px 10px; } "
-                "QPushButton:hover { background: #eef2f7; } "
-                "QLineEdit, QComboBox { min-height: 30px; padding: 2px 4px; } "
-                "QHeaderView::section { background: #eef2f7; color: #1f2937; border: 1px solid #c9d0da; } "
-                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
-            )
-            style += _switch_checkbox_style("#d1d5db", "#2563eb", "#c9d0da")
+        style += _switch_checkbox_theme_styles(theme, builder=_switch_checkbox_style)
         self.setStyleSheet(style)
         self._apply_terminal_style()

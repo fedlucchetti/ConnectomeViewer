@@ -61,33 +61,14 @@ except Exception:
         QVBoxLayout,
     )
 
+try:
+    from window.shared.theme import dialog_theme_stylesheet as _shared_dialog_theme_stylesheet
+except Exception:
+    from mrsi_viewer.window.shared.theme import dialog_theme_stylesheet as _shared_dialog_theme_stylesheet
+
+
 def _dialog_theme_stylesheet(theme_name="Dark"):
-    theme = str(theme_name or "Dark").strip().title()
-    if theme not in {"Light", "Dark", "Teya", "Donald"}:
-        theme = "Dark"
-    if theme == "Dark":
-        return theme, (
-            "QDialog, QWidget { background: #1f2430; color: #e5e7eb; }"
-            "QPushButton { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; border-radius: 6px; padding: 5px 10px; }"
-            "QPushButton:hover { background: #374256; }"
-        )
-    if theme == "Teya":
-        return theme, (
-            "QDialog, QWidget { background: #ffd0e5; color: #0b7f7a; }"
-            "QPushButton { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 6px; padding: 5px 10px; }"
-            "QPushButton:hover { background: #ffb1d5; }"
-        )
-    if theme == "Donald":
-        return theme, (
-            "QDialog, QWidget { background: #d97706; color: #ffffff; }"
-            "QPushButton { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; border-radius: 6px; padding: 5px 10px; }"
-            "QPushButton:hover { background: #c76b06; }"
-        )
-    return theme, (
-        "QDialog, QWidget { background: #f4f6f9; color: #1f2937; }"
-        "QPushButton { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; border-radius: 6px; padding: 5px 10px; }"
-        "QPushButton:hover { background: #edf2f7; }"
-    )
+    return _shared_dialog_theme_stylesheet(theme_name)
 
 
 class GradientSurfaceDialog(QDialog):
@@ -434,6 +415,9 @@ class GradientScatterDialog(QDialog):
         edge_alpha=0.16,
         edge_linewidth=0.45,
         point_group_codes=None,
+        show_proximity_circles=False,
+        initial_proximity_slider_value=0,
+        use_line_proximity_energy=True,
         project_paths_callback=None,
         export_metadata=None,
     ):
@@ -510,19 +494,23 @@ class GradientScatterDialog(QDialog):
         self._endpoint_selection_mode = "adaptive"
         self._manual_endpoint_target = None
         self._project_paths_payload = None
-        self._show_proximity_circles = False
+        self._show_proximity_circles = bool(show_proximity_circles)
         self._show_adjacency_edges = True
         self._show_all_ordered_paths = False
         self._use_edge_bundling = False
         self._edge_bundling_note = ""
         self._use_directionality_filter = False
-        self._use_line_proximity_energy = True
+        self._use_line_proximity_energy = bool(use_line_proximity_energy)
         display_x, display_y = self._rotate_points(self._x, self._y, self._rotation_preset)
         self._display_coords = np.column_stack((display_x, display_y))
         self._path_channel_order = self._default_path_channel_order()
         self._proximity_max_radius = self._compute_max_radius(self._display_coords)
         self._proximity_slider_steps = 1000
-        self._proximity_radius = 0.0
+        self._initial_proximity_slider_value = self._normalize_proximity_slider_value(
+            initial_proximity_slider_value,
+            self._proximity_slider_steps,
+        )
+        self._proximity_radius = self._slider_to_radius(self._initial_proximity_slider_value)
         self._edge_distances = self._compute_edge_distances(self._display_coords, self._edge_pairs)
         self._fixed_xlim, self._fixed_ylim = self._compute_fixed_axes(self._display_coords)
         self._point_artist = None
@@ -546,12 +534,13 @@ class GradientScatterDialog(QDialog):
 
         proximity_controls = QHBoxLayout()
         self.proximity_check = QCheckBox("Proximity circles")
+        self.proximity_check.setChecked(bool(self._show_proximity_circles))
         self.proximity_check.toggled.connect(self._on_proximity_toggled)
         proximity_controls.addWidget(self.proximity_check, 0)
         slider_orientation = Qt.Orientation.Horizontal if hasattr(Qt, "Orientation") else Qt.Horizontal
         self.proximity_slider = QSlider(slider_orientation)
         self.proximity_slider.setRange(0, self._proximity_slider_steps)
-        self.proximity_slider.setValue(0)
+        self.proximity_slider.setValue(int(self._initial_proximity_slider_value))
         self.proximity_slider.valueChanged.connect(self._on_proximity_slider_changed)
         proximity_controls.addWidget(self.proximity_slider, 1)
         self.proximity_value_label = QLabel(self._proximity_label_text())
@@ -595,7 +584,7 @@ class GradientScatterDialog(QDialog):
         self.direction_filter_check.toggled.connect(self._on_direction_filter_toggled)
         path_controls.addWidget(self.direction_filter_check, 0)
         self.line_proximity_energy_check = QCheckBox("Line proximity")
-        self.line_proximity_energy_check.setChecked(True)
+        self.line_proximity_energy_check.setChecked(bool(self._use_line_proximity_energy))
         self.line_proximity_energy_check.toggled.connect(self._on_line_proximity_toggled)
         path_controls.addWidget(self.line_proximity_energy_check, 0)
         path_controls.addWidget(QLabel("lambda"), 0)
@@ -903,6 +892,14 @@ class GradientScatterDialog(QDialog):
         if self._proximity_slider_steps <= 0 or self._proximity_max_radius <= 0.0:
             return 0.0
         return float(self._proximity_max_radius * (slider / float(self._proximity_slider_steps)))
+
+    @staticmethod
+    def _normalize_proximity_slider_value(value, max_steps):
+        try:
+            slider = int(value)
+        except Exception:
+            slider = 0
+        return max(0, min(int(max_steps), slider))
 
     def _proximity_label_text(self):
         return f"r = {self._proximity_radius:.4f} / {self._proximity_max_radius:.4f}"
@@ -4037,6 +4034,16 @@ class GradientScatterDialog(QDialog):
         }
 
     @staticmethod
+    def _normalize_rgb_chroma(values):
+        colors = np.asarray(values, dtype=float)
+        if colors.ndim != 2 or colors.shape[1] != 3:
+            return np.clip(colors, 0.0, 1.0)
+        colors = np.clip(colors, 0.0, 1.0)
+        scale = np.max(colors, axis=1, keepdims=True)
+        scale[scale <= 1e-9] = 1.0
+        return np.clip(colors / scale, 0.0, 1.0)
+
+    @staticmethod
     def _rgb_colors_from_model(x_values, y_values, model):
         x_valid = np.asarray(x_values, dtype=float).reshape(-1)
         y_valid = np.asarray(y_values, dtype=float).reshape(-1)
@@ -4060,7 +4067,7 @@ class GradientScatterDialog(QDialog):
             weight_sum = weights.sum(axis=1, keepdims=True)
             weight_sum[weight_sum <= 0] = 1.0
             weights /= weight_sum
-            colors[finite_mask] = weights @ vertex_colors
+            colors[finite_mask] = GradientScatterDialog._normalize_rgb_chroma(weights @ vertex_colors)
             return np.clip(colors, 0.0, 1.0)
 
         vertices = np.asarray(model["vertices"], dtype=float)
@@ -4095,7 +4102,7 @@ class GradientScatterDialog(QDialog):
         weight_sum = weights.sum(axis=1, keepdims=True)
         weight_sum[weight_sum <= 0] = 1.0
         weights /= weight_sum
-        colors[finite_mask] = weights @ vertex_colors
+        colors[finite_mask] = GradientScatterDialog._normalize_rgb_chroma(weights @ vertex_colors)
         return np.clip(colors, 0.0, 1.0)
 
     @staticmethod
@@ -4555,7 +4562,7 @@ class GradientClassificationDialog(QDialog):
         self.setWindowTitle(self._title)
 
         if self._hemisphere_mode == "both":
-            fig_width, fig_height = 19.2, 5.4
+            fig_width, fig_height = 13.8, 9.4
         else:
             fig_width, fig_height = 10.6, 5.1
         self.figure = Figure(figsize=(15.5, 8.6), constrained_layout=True)
@@ -4644,6 +4651,33 @@ class GradientClassificationDialog(QDialog):
         theme, style = _dialog_theme_stylesheet(theme_name)
         self._theme_name = theme
         self.setStyleSheet(style)
+
+    def _surface_views_layout(self):
+        assets = GradientSurfaceDialog._get_surface_assets(self._fsaverage_mesh)
+        if self._hemisphere_mode == "lh":
+            return [
+                [
+                    ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
+                    ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
+                ]
+            ]
+        if self._hemisphere_mode == "rh":
+            return [
+                [
+                    ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
+                    ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
+                ]
+            ]
+        return [
+            [
+                ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
+                ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
+            ],
+            [
+                ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
+                ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
+            ],
+        ]
 
     @staticmethod
     def _mesh_arrays(mesh):
@@ -4773,41 +4807,25 @@ class GradientClassificationDialog(QDialog):
 
     def _render(self):
         self.figure.clear()
-        assets = GradientSurfaceDialog._get_surface_assets(self._fsaverage_mesh)
+        view_rows = self._surface_views_layout()
+        n_rows = len(view_rows)
+        n_cols = max(len(row) for row in view_rows)
+        gs = self.figure.add_gridspec(n_rows, n_cols, wspace=0.02, hspace=0.08)
 
-        if self._hemisphere_mode == "lh":
-            views = (
-                ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
-                ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
-            )
-        elif self._hemisphere_mode == "rh":
-            views = (
-                ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
-                ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
-            )
-        else:
-            views = (
-                ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
-                ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
-                ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
-                ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
-            )
-
-        gs = self.figure.add_gridspec(1, len(views), wspace=0.02)
-        brain_axes = [self.figure.add_subplot(gs[0, idx], projection="3d") for idx in range(len(views))]
-
-        for ax, (hemi, view, mesh, bg_map, title) in zip(brain_axes, views):
-            vertex_colors, vertex_alpha = self._surface_vertex_colors(self._x_img, self._y_img, mesh)
-            self._plot_rgb_surface(
-                ax,
-                mesh,
-                vertex_colors,
-                vertex_alpha,
-                bg_map,
-                hemi=hemi,
-                view=view,
-                title=title,
-            )
+        for row_idx, row_views in enumerate(view_rows):
+            for col_idx, (hemi, view, mesh, bg_map, title) in enumerate(row_views):
+                ax = self.figure.add_subplot(gs[row_idx, col_idx], projection="3d")
+                vertex_colors, vertex_alpha = self._surface_vertex_colors(self._x_img, self._y_img, mesh)
+                self._plot_rgb_surface(
+                    ax,
+                    mesh,
+                    vertex_colors,
+                    vertex_alpha,
+                    bg_map,
+                    hemi=hemi,
+                    view=view,
+                    title=title,
+                )
 
         self.figure.suptitle(self._title, fontsize=15)
         self.canvas.draw_idle()

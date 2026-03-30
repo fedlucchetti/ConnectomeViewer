@@ -6,6 +6,7 @@ dependencies:
   - python=3.10
   - pip
   - numpy
+  - pandas
   - scipy
   - matplotlib
   - nibabel
@@ -13,8 +14,12 @@ dependencies:
   - tqdm
   - rich
   - pyqtgraph  
+  - datashader
+  - dask
+  - scikit-image
   - pip:
       - mrsitoolbox
+      - brainspace
       - PyQt6
       - PyQt6-Qt6
       - PyQt6-sip

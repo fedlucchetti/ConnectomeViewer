@@ -47,6 +47,12 @@ except Exception:
     )
 
 
+try:
+    from window.shared.theme import panel_dialog_stylesheet as _panel_dialog_stylesheet
+except Exception:
+    from mrsi_viewer.window.shared.theme import panel_dialog_stylesheet as _panel_dialog_stylesheet
+
+
 class GradientsPrepareDialog(QDialog):
     """Small modeless window for the gradients workflow."""
 
@@ -1219,71 +1225,12 @@ class GradientsPrepareDialog(QDialog):
         self._trigger_precomputed_row_confirm()
 
     def set_theme(self, theme_name="Dark"):
-        theme = str(theme_name or "Dark").strip().title()
-        if theme not in {"Light", "Dark", "Teya", "Donald"}:
-            theme = "Dark"
-        if theme == "Dark":
-            style = (
-                "QDialog, QWidget { background: #1f2430; color: #e5e7eb; }"
-                "QGroupBox { border: 1px solid #5f6d82; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; border-radius: 6px; padding: 5px 8px; }"
-                "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #5f6d82; border-radius: 2px; background: #2d3646; }"
-                "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
-                "QTabWidget::pane { border: 1px solid #5f6d82; border-radius: 8px; top: -1px; }"
-                "QTabBar::tab { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
-                "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
-                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
-                "QPushButton:hover { background: #374256; }"
-                "QProgressBar { border: 1px solid #5f6d82; border-radius: 6px; text-align: center; background: #2d3646; }"
-                "QProgressBar::chunk { background: #2563eb; border-radius: 5px; }"
-            )
-        elif theme == "Teya":
-            style = (
-                "QDialog, QWidget { background: #ffd0e5; color: #0b7f7a; }"
-                "QGroupBox { border: 1px solid #1db8b2; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 6px; padding: 5px 8px; }"
-                "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #1db8b2; border-radius: 2px; background: #ffe6f1; }"
-                "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
-                "QTabWidget::pane { border: 1px solid #1db8b2; border-radius: 8px; top: -1px; }"
-                "QTabBar::tab { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
-                "QTabBar::tab:selected { background: #2ecfc9; color: #073f3c; }"
-                "QTableWidget::item:selected { background: #2ecfc9; color: #073f3c; }"
-                "QPushButton:hover { background: #ffb1d5; }"
-                "QProgressBar { border: 1px solid #1db8b2; border-radius: 6px; text-align: center; background: #ffc0dc; }"
-                "QProgressBar::chunk { background: #2ecfc9; border-radius: 5px; }"
-            )
-        elif theme == "Donald":
-            style = (
-                "QDialog, QWidget { background: #d97706; color: #ffffff; }"
-                "QGroupBox { border: 1px solid #f3a451; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; border-radius: 6px; padding: 5px 8px; }"
-                "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #f3a451; border-radius: 2px; background: #c96a04; }"
-                "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
-                "QTabWidget::pane { border: 1px solid #f3a451; border-radius: 8px; top: -1px; }"
-                "QTabBar::tab { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
-                "QTabBar::tab:selected { background: #ffd19e; color: #7c2d12; }"
-                "QTableWidget::item:selected { background: #ffd19e; color: #7c2d12; }"
-                "QPushButton:hover { background: #c76b06; }"
-                "QProgressBar { border: 1px solid #f3a451; border-radius: 6px; text-align: center; background: #b85f00; }"
-                "QProgressBar::chunk { background: #ffd19e; border-radius: 5px; }"
-            )
-        else:
-            style = (
-                "QDialog, QWidget { background: #f4f6f9; color: #1f2937; }"
-                "QGroupBox { border: 1px solid #b7c0cc; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox, QSpinBox, QTableWidget { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; border-radius: 6px; padding: 5px 8px; }"
-                "QCheckBox#triangularRgbCheck::indicator { width: 14px; height: 14px; border: 1px solid #b7c0cc; border-radius: 2px; background: #ffffff; }"
-                "QCheckBox#triangularRgbCheck::indicator:checked { background: #22c55e; border: 1px solid #15803d; }"
-                "QTabWidget::pane { border: 1px solid #b7c0cc; border-radius: 8px; top: -1px; }"
-                "QTabBar::tab { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; padding: 6px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
-                "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
-                "QTableWidget::item:selected { background: #2563eb; color: #ffffff; }"
-                "QPushButton:hover { background: #edf2f7; }"
-                "QProgressBar { border: 1px solid #b7c0cc; border-radius: 6px; text-align: center; background: #ffffff; }"
-                "QProgressBar::chunk { background: #2563eb; border-radius: 5px; }"
-            )
+        self._theme_name, style = _panel_dialog_stylesheet(
+            theme_name,
+            control_selector="QPushButton, QComboBox, QSpinBox, QTableWidget",
+            include_groupbox=True,
+            include_tabs=True,
+            include_progress=True,
+            checkbox_indicator_selector="QCheckBox#triangularRgbCheck",
+        )
         self.setStyleSheet(style)

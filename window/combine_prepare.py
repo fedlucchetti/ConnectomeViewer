@@ -36,6 +36,12 @@ except Exception:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 
+try:
+    from window.shared.theme import panel_dialog_stylesheet as _panel_dialog_stylesheet
+except Exception:
+    from mrsi_viewer.window.shared.theme import panel_dialog_stylesheet as _panel_dialog_stylesheet
+
+
 class CombinePrepareDialog(QDialog):
     """Modeless window to combine two workspace matrices."""
 
@@ -393,43 +399,12 @@ class CombinePrepareDialog(QDialog):
         self.result_canvas.draw_idle()
 
     def set_theme(self, theme_name="Dark"):
-        theme = str(theme_name or "Dark").strip().title()
-        if theme not in {"Light", "Dark", "Teya", "Donald"}:
-            theme = "Dark"
+        theme, style = _panel_dialog_stylesheet(
+            theme_name,
+            control_selector="QPushButton, QComboBox",
+            include_groupbox=True,
+        )
         self._plot_colors = self._theme_plot_colors(theme)
-
-        if theme == "Dark":
-            style = (
-                "QDialog, QWidget { background: #1f2430; color: #e5e7eb; }"
-                "QGroupBox { border: 1px solid #5f6d82; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox { background: #2d3646; color: #e5e7eb; border: 1px solid #5f6d82; border-radius: 6px; padding: 5px 8px; }"
-                "QPushButton:hover { background: #374256; }"
-            )
-        elif theme == "Teya":
-            style = (
-                "QDialog, QWidget { background: #ffd0e5; color: #0b7f7a; }"
-                "QGroupBox { border: 1px solid #1db8b2; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox { background: #ffc0dc; color: #0b7f7a; border: 1px solid #1db8b2; border-radius: 6px; padding: 5px 8px; }"
-                "QPushButton:hover { background: #ffb1d5; }"
-            )
-        elif theme == "Donald":
-            style = (
-                "QDialog, QWidget { background: #d97706; color: #ffffff; }"
-                "QGroupBox { border: 1px solid #f3a451; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 700; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox { background: #b85f00; color: #ffffff; border: 1px solid #f3a451; border-radius: 6px; padding: 5px 8px; }"
-                "QPushButton:hover { background: #c76b06; }"
-            )
-        else:
-            style = (
-                "QDialog, QWidget { background: #f4f6f9; color: #1f2937; }"
-                "QGroupBox { border: 1px solid #b7c0cc; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }"
-                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-                "QPushButton, QComboBox { background: #ffffff; color: #1f2937; border: 1px solid #b7c0cc; border-radius: 6px; padding: 5px 8px; }"
-                "QPushButton:hover { background: #edf2f7; }"
-            )
         self.setStyleSheet(style)
         self._render_result_payload()
 
