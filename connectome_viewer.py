@@ -200,6 +200,61 @@ try:
 except Exception:
     RectangleSelector = None
 
+try:
+    from services.combine import (
+        align_matrices_by_intersection as _combine_align_matrices,
+        apply_matrix_operation as _combine_apply_op,
+        combine_operation_label as _combine_op_label,
+        combine_operation_symbol as _combine_op_symbol,
+        compute_correlation_stats as _combine_corr_stats,
+        correlation_vectors as _combine_corr_vectors,
+        format_p_value as _format_combine_p_value,
+    )
+    from services.data_access import MatrixDataAccess as _MatrixDataAccess
+    from services.entry_helpers import (
+        collect_export_metadata as _collect_entry_export_metadata,
+        default_entry_title as _default_entry_title_helper,
+        normalize_covar_selection as _normalize_covar_selection,
+        safe_name_fragment as _safe_name_fragment_helper,
+    )
+    from services.plot_prep import (
+        default_entry_display_settings as _default_plot_display_settings,
+        ensure_entry_display_settings as _ensure_plot_display_settings,
+        log_scale_error as _plot_log_scale_error,
+        normalize_display_scale as _normalize_plot_display_scale,
+        normalize_matrix_labels as _normalize_plot_matrix_labels,
+        parse_display_limits as _parse_plot_display_limits,
+        resolve_entry_plot as _resolve_entry_plot,
+    )
+    from services.workspace import WorkspaceStore as _WorkspaceStore
+except Exception:
+    from mrsi_viewer.services.combine import (
+        align_matrices_by_intersection as _combine_align_matrices,
+        apply_matrix_operation as _combine_apply_op,
+        combine_operation_label as _combine_op_label,
+        combine_operation_symbol as _combine_op_symbol,
+        compute_correlation_stats as _combine_corr_stats,
+        correlation_vectors as _combine_corr_vectors,
+        format_p_value as _format_combine_p_value,
+    )
+    from mrsi_viewer.services.data_access import MatrixDataAccess as _MatrixDataAccess
+    from mrsi_viewer.services.entry_helpers import (
+        collect_export_metadata as _collect_entry_export_metadata,
+        default_entry_title as _default_entry_title_helper,
+        normalize_covar_selection as _normalize_covar_selection,
+        safe_name_fragment as _safe_name_fragment_helper,
+    )
+    from mrsi_viewer.services.plot_prep import (
+        default_entry_display_settings as _default_plot_display_settings,
+        ensure_entry_display_settings as _ensure_plot_display_settings,
+        log_scale_error as _plot_log_scale_error,
+        normalize_display_scale as _normalize_plot_display_scale,
+        normalize_matrix_labels as _normalize_plot_matrix_labels,
+        parse_display_limits as _parse_plot_display_limits,
+        resolve_entry_plot as _resolve_entry_plot,
+    )
+    from mrsi_viewer.services.workspace import WorkspaceStore as _WorkspaceStore
+
 from mrsitoolbox.graphplot.simmatrix import SimMatrixPlot
 from mrsitoolbox.graphplot.colorbar import ColorBar
 from mrsitoolbox.graphplot import colorbar as colorbar_module
@@ -2666,13 +2721,24 @@ class ConnectomeViewer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._increase_global_font_size()
-        self._entries = {}
-        self._derived_counter = 0
-        self.titles = {}
-        self._covars_cache = {}
-        self._valid_keys_cache = {}
-        self._parcel_metadata_cache = {}
-        self._group_values_cache = {}
+        self._workspace = _WorkspaceStore()
+        self._entries = self._workspace.entries
+        self.titles = self._workspace.titles
+        self._data_access = _MatrixDataAccess(
+            load_covars_info=_load_covars_info,
+            get_valid_keys=_get_valid_keys,
+            load_parcel_metadata=_load_parcel_metadata,
+            load_group_value=_load_group_value,
+            load_matrix_from_npz=_load_matrix_from_npz,
+            stack_axis=_stack_axis,
+            average_to_square=_average_to_square,
+            select_stack_slice=_select_stack_slice,
+            to_string_list=_to_string_list,
+        )
+        self._covars_cache = self._data_access.covars_cache
+        self._valid_keys_cache = self._data_access.valid_keys_cache
+        self._parcel_metadata_cache = self._data_access.parcel_metadata_cache
+        self._group_values_cache = self._data_access.group_values_cache
         self._current_matrix = None
         self._current_parcel_labels = None
         self._current_parcel_names = None
@@ -2696,6 +2762,8 @@ class ConnectomeViewer(QMainWindow):
         self._nbs_dialog = None
         self._selector_dialog = None
         self._harmonize_dialog = None
+        self._combine_dialog = None
+        self._combine_pending_result = None
         self._batch_import_dialog = None
         self._stack_prepare_dialog = None
         self._label_info_dialog = None
@@ -3248,6 +3316,13 @@ class ConnectomeViewer(QMainWindow):
         self.harmonize_prepare_button.setEnabled(False)
         harmonize_layout.addWidget(self.harmonize_prepare_button)
 
+        combine_group = QGroupBox("Combine")
+        combine_layout = QVBoxLayout(combine_group)
+        self.combine_open_button = QPushButton("Combine")
+        self.combine_open_button.clicked.connect(self._open_combine_dialog)
+        self.combine_open_button.setEnabled(False)
+        combine_layout.addWidget(self.combine_open_button)
+
         self._reload_colormaps()
 
         self._styled_groups = [
@@ -3258,6 +3333,7 @@ class ConnectomeViewer(QMainWindow):
             gradients_group,
             nbs_group,
             harmonize_group,
+            combine_group,
         ]
 
         controls_layout.addWidget(list_group)
@@ -3356,6 +3432,7 @@ class ConnectomeViewer(QMainWindow):
         right_panel_layout.addWidget(gradients_group)
         right_panel_layout.addWidget(nbs_group)
         right_panel_layout.addWidget(harmonize_group)
+        right_panel_layout.addWidget(combine_group)
         right_panel_layout.addStretch(1)
         left_panel.setMinimumWidth(0)
         right_panel.setMinimumWidth(0)
@@ -3586,6 +3663,11 @@ class ConnectomeViewer(QMainWindow):
                 self._harmonize_dialog.set_theme(theme)
             except Exception:
                 pass
+        if getattr(self, "_combine_dialog", None) is not None and hasattr(self._combine_dialog, "set_theme"):
+            try:
+                self._combine_dialog.set_theme(theme)
+            except Exception:
+                pass
         if getattr(self, "_stack_prepare_dialog", None) is not None and hasattr(
             self._stack_prepare_dialog, "set_theme"
         ):
@@ -3706,6 +3788,7 @@ class ConnectomeViewer(QMainWindow):
             (getattr(self, "gradients_open_button", None), "cube_3d.svg"),
             (getattr(self, "nbs_prepare_button", None), "wrench_prepare.svg"),
             (getattr(self, "harmonize_prepare_button", None), "wrench_prepare.svg"),
+            (getattr(self, "combine_open_button", None), "play_circle_compute.svg"),
             (getattr(self, "selector_prepare_button", None), "filter_threshold.svg"),
             (getattr(self, "sample_add_button", None), "folder_plus.svg"),
         ]
@@ -3719,11 +3802,10 @@ class ConnectomeViewer(QMainWindow):
             button.setIconSize(icon_size)
 
     def _file_entry_id(self, path: Path) -> str:
-        return f"file::{path}"
+        return self._workspace.file_entry_id(path)
 
     def _new_derived_id(self) -> str:
-        self._derived_counter += 1
-        return f"derived::{self._derived_counter}"
+        return self._workspace.new_derived_id()
 
     def _entry_ids(self):
         for i in range(self.file_list.count()):
@@ -3743,6 +3825,28 @@ class ConnectomeViewer(QMainWindow):
         if entry_id is None:
             return None
         return self._entries.get(entry_id)
+
+    def _add_workspace_list_item(self, entry, *, tooltip=None, select: bool = True):
+        if not isinstance(entry, dict):
+            return None
+        item = QListWidgetItem(str(entry.get("label") or entry.get("id") or ""))
+        item.setData(USER_ROLE, entry.get("id"))
+        if tooltip is not None:
+            item.setToolTip(str(tooltip))
+        self.file_list.addItem(item)
+        if select:
+            self.file_list.setCurrentItem(item)
+        return item
+
+    def _select_workspace_entry(self, entry_id) -> bool:
+        for row in range(self.file_list.count()):
+            item = self.file_list.item(row)
+            if item is None:
+                continue
+            if item.data(USER_ROLE) == entry_id:
+                self.file_list.setCurrentItem(item)
+                return True
+        return False
 
     def _current_source_path(self):
         entry = self._current_entry()
@@ -3800,10 +3904,7 @@ class ConnectomeViewer(QMainWindow):
         source_path = self._current_source_path()
         enabled = False
         if source_path is not None and source_path.exists():
-            info = self._covars_cache.get(source_path)
-            if info is None:
-                info = _load_covars_info(source_path)
-                self._covars_cache[source_path] = info
+            info = self._covars_info_cached(source_path)
             enabled = bool(_covars_columns(info))
         self.view_participants_button.setEnabled(enabled)
 
@@ -3829,10 +3930,7 @@ class ConnectomeViewer(QMainWindow):
         if source_path is None or not source_path.exists():
             self.statusBar().showMessage("Select a matrix backed by an NPZ file to inspect participants.")
             return
-        covars_info = self._covars_cache.get(source_path)
-        if covars_info is None:
-            covars_info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = covars_info
+        covars_info = self._covars_info_cached(source_path)
         if covars_info is None:
             self.statusBar().showMessage("Covars not found in selected file.")
             return
@@ -5217,12 +5315,10 @@ class ConnectomeViewer(QMainWindow):
 
     @staticmethod
     def _gradient_entry_source_path(entry):
-        if entry is None:
-            return None
-        source_path = entry.get("source_path", entry.get("path"))
-        if not source_path:
-            return None
-        return Path(source_path)
+        return _MatrixDataAccess.entry_source_path(entry)
+
+    def _entry_parcel_metadata(self, entry, expected_len=None):
+        return self._data_access.entry_parcel_metadata(entry, expected_len=expected_len)
 
     def _gradient_matrix_label_for_entry(self, entry) -> str:
         if entry is None:
@@ -5249,6 +5345,21 @@ class ConnectomeViewer(QMainWindow):
                 }
             )
         return options
+
+    def _available_combine_matrix_entries(self):
+        return self._available_gradient_matrix_entries()
+
+    def _sync_combine_dialog_state(self) -> None:
+        dialog = getattr(self, "_combine_dialog", None)
+        if dialog is None:
+            return
+        dialog.set_matrix_options(self._available_combine_matrix_entries())
+
+    def _update_combine_button(self) -> None:
+        enabled = bool(self._available_combine_matrix_entries())
+        if hasattr(self, "combine_open_button"):
+            self.combine_open_button.setEnabled(enabled)
+        self._sync_combine_dialog_state()
 
     def _selected_gradient_entry_id(self):
         stored = self._gradient_selected_entry_id
@@ -5523,6 +5634,7 @@ class ConnectomeViewer(QMainWindow):
             self._update_gradients_button()
             self._update_selector_prepare_button()
             self._update_harmonize_prepare_button()
+            self._update_combine_button()
             return
         self.nbs_prepare_button.setEnabled(enabled)
         if hasattr(self, "nbs_prepare_action"):
@@ -5530,6 +5642,7 @@ class ConnectomeViewer(QMainWindow):
         self._update_gradients_button()
         self._update_selector_prepare_button()
         self._update_harmonize_prepare_button()
+        self._update_combine_button()
 
     def _current_selector_source(self):
         return self._current_nbs_source()
@@ -5544,10 +5657,7 @@ class ConnectomeViewer(QMainWindow):
         enabled = False
         if source is not None:
             source_path = source["path"]
-            info = self._covars_cache.get(source_path)
-            if info is None:
-                info = _load_covars_info(source_path)
-                self._covars_cache[source_path] = info
+            info = self._covars_info_cached(source_path)
             enabled = bool(_covars_columns(info))
         self.selector_prepare_button.setEnabled(enabled)
         self._update_harmonize_prepare_button()
@@ -5562,10 +5672,7 @@ class ConnectomeViewer(QMainWindow):
         enabled = False
         if source is not None:
             source_path = source["path"]
-            info = self._covars_cache.get(source_path)
-            if info is None:
-                info = _load_covars_info(source_path)
-                self._covars_cache[source_path] = info
+            info = self._covars_info_cached(source_path)
             enabled = bool(_covars_columns(info))
         self.harmonize_prepare_button.setEnabled(enabled)
         if hasattr(self, "harmonize_prepare_action"):
@@ -5586,10 +5693,7 @@ class ConnectomeViewer(QMainWindow):
             return
 
         source_path = source["path"]
-        covars_info = self._covars_cache.get(source_path)
-        if covars_info is None:
-            covars_info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = covars_info
+        covars_info = self._covars_info_cached(source_path)
         if covars_info is None:
             self.statusBar().showMessage("Covars not found in selected file.")
             return
@@ -5643,10 +5747,7 @@ class ConnectomeViewer(QMainWindow):
             return
 
         source_path = source["path"]
-        covars_info = self._covars_cache.get(source_path)
-        if covars_info is None:
-            covars_info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = covars_info
+        covars_info = self._covars_info_cached(source_path)
         if covars_info is None:
             self.statusBar().showMessage("Covars not found in selected file.")
             return
@@ -5694,10 +5795,7 @@ class ConnectomeViewer(QMainWindow):
             return
 
         source_path = source["path"]
-        covars_info = self._covars_cache.get(source_path)
-        if covars_info is None:
-            covars_info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = covars_info
+        covars_info = self._covars_info_cached(source_path)
         if covars_info is None:
             self.statusBar().showMessage("Covars not found in selected file.")
             return
@@ -5737,6 +5835,271 @@ class ConnectomeViewer(QMainWindow):
             f"Opened Harmonize Prepare ({source_path.name}, key={source['key']})."
         )
 
+    def _open_combine_dialog(self) -> None:
+        if not self._available_combine_matrix_entries():
+            self.statusBar().showMessage("Add at least one workspace matrix before opening Combine.")
+            return
+
+        if getattr(self, "_combine_dialog", None) is None:
+            try:
+                from window.combine_prepare import CombinePrepareDialog
+            except Exception:
+                try:
+                    from mrsi_viewer.window.combine_prepare import CombinePrepareDialog
+                except Exception as exc:
+                    self.statusBar().showMessage(f"Failed to open Combine window: {exc}")
+                    return
+
+            self._combine_dialog = CombinePrepareDialog(
+                theme_name=self._theme_name,
+                process_callback=self._process_combine_operation,
+                confirm_callback=self._confirm_combine_result,
+                parent=self,
+            )
+
+        self._sync_combine_dialog_state()
+        self._combine_dialog.show()
+        try:
+            self._combine_dialog.raise_()
+            self._combine_dialog.activateWindow()
+        except Exception:
+            pass
+        self.statusBar().showMessage("Opened Combine window.")
+
+    @staticmethod
+    def _combine_operation_label(operation: str) -> str:
+        return _combine_op_label(operation)
+
+    @staticmethod
+    def _combine_operation_symbol(operation: str) -> str:
+        return _combine_op_symbol(operation)
+
+    def _format_p_value(self, value) -> str:
+        return _format_combine_p_value(value)
+
+    def _align_combine_matrices_by_intersection(self, first_entry, first_matrix, second_entry, second_matrix):
+        first_labels_raw, first_names = self._entry_parcel_metadata(first_entry, expected_len=first_matrix.shape[0])
+        second_labels_raw, second_names = self._entry_parcel_metadata(second_entry, expected_len=second_matrix.shape[0])
+        alignment = _combine_align_matrices(
+            first_matrix,
+            second_matrix,
+            first_labels_raw=first_labels_raw,
+            second_labels_raw=second_labels_raw,
+            first_names=first_names,
+            second_names=second_names,
+            coerce_label_indices=_coerce_label_indices,
+        )
+        return (
+            alignment.first_matrix,
+            alignment.second_matrix,
+            alignment.parcel_labels_group,
+            alignment.parcel_names_group,
+            alignment.summary_text,
+            alignment.used_label_intersection,
+        )
+
+    def _process_combine_operation(self, first_entry_id, second_entry_id, operation) -> None:
+        dialog = getattr(self, "_combine_dialog", None)
+        self._combine_pending_result = None
+        if dialog is not None:
+            dialog.set_can_confirm(False)
+        first_entry = self._entries.get(first_entry_id)
+        second_entry = self._entries.get(second_entry_id)
+        if first_entry is None or second_entry is None:
+            message = "Select two valid workspace matrices."
+            if dialog is not None:
+                dialog.set_status(message)
+            self.statusBar().showMessage(message)
+            return
+
+        first_label = self._gradient_matrix_label_for_entry(first_entry)
+        second_label = self._gradient_matrix_label_for_entry(second_entry)
+        operation_label = self._combine_operation_label(operation)
+
+        try:
+            first_matrix, _ = self._matrix_for_entry(first_entry)
+            second_matrix, _ = self._matrix_for_entry(second_entry)
+            first_matrix = np.asarray(first_matrix, dtype=float)
+            second_matrix = np.asarray(second_matrix, dtype=float)
+            (
+                first_matrix,
+                second_matrix,
+                aligned_labels,
+                aligned_names,
+                alignment_summary,
+                used_label_intersection,
+            ) = self._align_combine_matrices_by_intersection(
+                first_entry,
+                first_matrix,
+                second_entry,
+                second_matrix,
+            )
+        except Exception as exc:
+            message = f"Failed to load matrices for {operation_label}: {exc}"
+            if dialog is not None:
+                dialog.set_status(message)
+            self.statusBar().showMessage(message)
+            return
+
+        try:
+            operation_name = str(operation or "").strip().lower()
+            if operation_name == "correlation":
+                self._show_combine_correlation(
+                    first_matrix,
+                    second_matrix,
+                    first_label=first_label,
+                    second_label=second_label,
+                    alignment_summary=alignment_summary,
+                )
+                return
+
+            if operation_name == "intersect" and not used_label_intersection:
+                raise ValueError(
+                    "Intersect requires square matrices with valid parcel_labels_group in both inputs."
+                )
+
+            result_matrix = self._combine_apply_matrix_operation(first_matrix, second_matrix, operation)
+            finite_values = np.asarray(result_matrix, dtype=float)
+            finite_values = finite_values[np.isfinite(finite_values)]
+            if finite_values.size:
+                min_text = f"{float(np.min(finite_values)):.4g}"
+                max_text = f"{float(np.max(finite_values)):.4g}"
+            else:
+                min_text = "n/a"
+                max_text = "n/a"
+            if operation_name == "intersect":
+                result_label = f"intersect({first_label}, {second_label})"
+            else:
+                result_label = f"{first_label} {self._combine_operation_symbol(operation)} {second_label}"
+            result_labels = aligned_labels
+            result_names = aligned_names
+            if result_matrix.ndim == 2 and result_matrix.shape[0] == result_matrix.shape[1]:
+                if result_labels is None:
+                    result_labels, result_names = self._entry_parcel_metadata(
+                        first_entry,
+                        expected_len=result_matrix.shape[0],
+                    )
+            result_summary = (
+                f"{operation_label} result | shape={tuple(result_matrix.shape)} | "
+                f"{alignment_summary} | "
+                f"min={min_text} | max={max_text}"
+            )
+            source_path = first_entry.get("source_path", first_entry.get("path"))
+            self._combine_pending_result = {
+                "matrix": np.asarray(result_matrix, dtype=float),
+                "label": result_label,
+                "summary_text": result_summary,
+                "source_path": source_path,
+                "operation": str(operation or ""),
+                "first_entry_id": first_entry_id,
+                "second_entry_id": second_entry_id,
+                "parcel_labels_group": np.asarray(result_labels) if result_labels is not None else None,
+                "parcel_names_group": np.asarray(result_names, dtype=object) if result_names is not None else None,
+            }
+
+            if dialog is not None:
+                dialog.show_matrix_result(
+                    result_matrix,
+                    title=result_label,
+                    summary_text=result_summary,
+                )
+                dialog.set_status("Processed matrix operation. Click Add to Workspace to confirm.")
+            self.statusBar().showMessage(
+                f"{operation_label} complete. Preview ready; confirm to add it to the workspace."
+            )
+        except Exception as exc:
+            message = f"{operation_label} failed: {exc}"
+            if dialog is not None:
+                dialog.set_status(message)
+            self.statusBar().showMessage(message)
+
+    def _confirm_combine_result(self) -> None:
+        dialog = getattr(self, "_combine_dialog", None)
+        payload = self._combine_pending_result
+        if not isinstance(payload, dict):
+            message = "No processed combine result is waiting for confirmation."
+            if dialog is not None:
+                dialog.set_status(message)
+                dialog.set_can_confirm(False)
+            self.statusBar().showMessage(message)
+            return
+
+        _derived_id, entry = self._workspace.add_derived_entry(
+            np.asarray(payload["matrix"], dtype=float),
+            label=str(payload.get("label") or "combine_result"),
+            source_path=payload.get("source_path"),
+            selected_key=None,
+            sample_index=None,
+            extra_fields={
+                "combine_operation": str(payload.get("operation") or ""),
+                "combine_source_a": payload.get("first_entry_id"),
+                "combine_source_b": payload.get("second_entry_id"),
+                "parcel_labels_group": (
+                    np.asarray(payload["parcel_labels_group"])
+                    if payload.get("parcel_labels_group") is not None
+                    else None
+                ),
+                "parcel_names_group": (
+                    np.asarray(payload["parcel_names_group"], dtype=object)
+                    if payload.get("parcel_names_group") is not None
+                    else None
+                ),
+            },
+        )
+        self._add_workspace_list_item(entry, tooltip=entry["label"], select=True)
+        self._sync_combine_dialog_state()
+        self._combine_pending_result = None
+
+        if dialog is not None:
+            dialog.set_can_confirm(False)
+            dialog.set_status("Added the previewed result to the workspace.")
+        self.statusBar().showMessage("Added confirmed combine result to the workspace.")
+
+    def _combine_apply_matrix_operation(self, first_matrix, second_matrix, operation):
+        return _combine_apply_op(first_matrix, second_matrix, operation)
+
+    def _combine_vectors_for_correlation(self, first_matrix, second_matrix):
+        return _combine_corr_vectors(first_matrix, second_matrix)
+
+    def _show_combine_correlation(
+        self,
+        first_matrix,
+        second_matrix,
+        *,
+        first_label: str,
+        second_label: str,
+        alignment_summary: str = "",
+    ) -> None:
+        dialog = getattr(self, "_combine_dialog", None)
+        first_values, second_values, mode_text = self._combine_vectors_for_correlation(first_matrix, second_matrix)
+        stats = _combine_corr_stats(first_values, second_values, mode_text)
+
+        title = f"Correlation: {first_label} vs {second_label}"
+        summary_parts = []
+        if alignment_summary:
+            summary_parts.append(str(alignment_summary))
+        summary_parts.append(f"Pearson correlation on {stats.mode_text}")
+        summary_parts.append(f"n={stats.first_values.size}")
+        summary_parts.append(f"r={float(stats.r_value):.4f}")
+        summary_parts.append(f"p={self._format_p_value(stats.p_value)}")
+        summary = " | ".join(summary_parts)
+
+        if dialog is not None:
+            dialog.show_correlation_result(
+                stats.first_values,
+                stats.second_values,
+                title=title,
+                summary_text=summary,
+                r_value=stats.r_value,
+                p_value=stats.p_value,
+                slope=stats.slope,
+                intercept=stats.intercept,
+            )
+            dialog.set_status("Processed correlation and displayed the regression plot.")
+        self.statusBar().showMessage(
+            f"Correlation complete: r={float(stats.r_value):.4f}, p={self._format_p_value(stats.p_value)}."
+        )
+
     def _import_harmonized_result(self, payload) -> bool:
         output_raw = str(payload.get("output_path") or "").strip()
         if not output_raw:
@@ -5750,15 +6113,7 @@ class ConnectomeViewer(QMainWindow):
         self._invalidate_path_caches(output_path)
         self._add_files([str(output_path)])
         target_id = self._file_entry_id(output_path)
-        selected = False
-        for row in range(self.file_list.count()):
-            item = self.file_list.item(row)
-            if item is None:
-                continue
-            if item.data(USER_ROLE) == target_id:
-                self.file_list.setCurrentItem(item)
-                selected = True
-                break
+        selected = self._select_workspace_entry(target_id)
         if not selected:
             self.statusBar().showMessage(
                 f"Harmonized file saved to {output_path.name} (already in workspace)."
@@ -5782,14 +6137,9 @@ class ConnectomeViewer(QMainWindow):
         self._invalidate_path_caches(output_path)
         self._add_files([str(output_path)])
         target_id = self._file_entry_id(output_path)
-        for row in range(self.file_list.count()):
-            item = self.file_list.item(row)
-            if item is None:
-                continue
-            if item.data(USER_ROLE) == target_id:
-                self.file_list.setCurrentItem(item)
-                self.statusBar().showMessage(f"Imported stacked matrix file: {output_path.name}.")
-                return True
+        if self._select_workspace_entry(target_id):
+            self.statusBar().showMessage(f"Imported stacked matrix file: {output_path.name}.")
+            return True
         self.statusBar().showMessage(f"Stacked matrix saved to {output_path.name}.")
         return True
 
@@ -5848,26 +6198,20 @@ class ConnectomeViewer(QMainWindow):
             filter_text = f"n={n_selected}/{n_total}"
         label = f"{method_label} {matrix_key} [{filter_text}] ({source_name})"
 
-        derived_id = self._new_derived_id()
-        self._entries[derived_id] = {
-            "id": derived_id,
-            "kind": "derived",
-            "matrix": matrix,
-            "source_path": source_path,
-            "selected_key": matrix_key,
-            "sample_index": None,
-            "auto_title": True,
-            "label": label,
-            "aggregation_method": method,
-            "selected_rows": selected_rows,
-            "covar_name": filter_covar or None,
-            "covar_value": ",".join(filter_values) if filter_values else None,
-        }
-        self.titles[derived_id] = label
-        item = QListWidgetItem(label)
-        item.setData(USER_ROLE, derived_id)
-        self.file_list.addItem(item)
-        self.file_list.setCurrentItem(item)
+        _derived_id, entry = self._workspace.add_derived_entry(
+            matrix,
+            label=label,
+            source_path=source_path,
+            selected_key=matrix_key,
+            sample_index=None,
+            extra_fields={
+                "aggregation_method": method,
+                "selected_rows": selected_rows,
+                "covar_name": filter_covar or None,
+                "covar_value": ",".join(filter_values) if filter_values else None,
+            },
+        )
+        self._add_workspace_list_item(entry, select=True)
         self.statusBar().showMessage(f"Imported aggregated matrix ({method_label}).")
         return True
 
@@ -5978,20 +6322,8 @@ class ConnectomeViewer(QMainWindow):
             entry_id = self._file_entry_id(path)
             if entry_id in self._entries:
                 continue
-            entry = {
-                "id": entry_id,
-                "kind": "file",
-                "path": path,
-                "selected_key": None,
-                "sample_index": None,
-                "auto_title": True,
-                "label": path.name,
-            }
-            self._entries[entry_id] = entry
-            item = QListWidgetItem(path.name)
-            item.setToolTip(str(path))
-            item.setData(USER_ROLE, entry_id)
-            self.file_list.addItem(item)
+            _entry_id, entry = self._workspace.add_file_entry(path, label=path.name)
+            self._add_workspace_list_item(entry, tooltip=path, select=False)
             added_paths.append(path)
             added_any = True
 
@@ -6004,6 +6336,7 @@ class ConnectomeViewer(QMainWindow):
         if not added_any:
             if loaded_precomputed_bundle is None:
                 self.statusBar().showMessage("No valid .npz files added.")
+        self._sync_combine_dialog_state()
         return added_paths
 
     def _remove_selected(self) -> None:
@@ -6011,73 +6344,41 @@ class ConnectomeViewer(QMainWindow):
         if item is None:
             return
         entry_id = item.data(USER_ROLE)
-        if entry_id in self._entries:
-            self._entries.pop(entry_id, None)
-        self.titles.pop(entry_id, None)
+        self._workspace.remove_entry(entry_id)
         row = self.file_list.row(item)
         self.file_list.takeItem(row)
         if self.file_list.count() == 0:
             self._clear_plot()
         else:
             self._update_nbs_prepare_button()
+        self._sync_combine_dialog_state()
 
     def _clear_files(self) -> None:
-        self._entries.clear()
-        self.titles.clear()
-        self._covars_cache.clear()
-        self._valid_keys_cache.clear()
-        self._parcel_metadata_cache.clear()
-        self._group_values_cache.clear()
+        self._workspace.clear()
+        self._data_access.clear_caches()
         self._gradient_precomputed_bundle = None
         self._gradient_precomputed_selected_row = None
         self._gradient_use_precomputed_bundle = False
         self.file_list.clear()
         self._clear_plot()
         self._update_nbs_prepare_button()
+        self._sync_combine_dialog_state()
         self.statusBar().showMessage("File list cleared.")
 
     def _get_valid_keys_cached(self, path: Path):
-        path = Path(path)
-        cached = self._valid_keys_cache.get(path)
-        if cached is None:
-            cached = list(_get_valid_keys(path))
-            self._valid_keys_cache[path] = cached
-        return list(cached)
+        return list(self._data_access.get_valid_keys(path))
 
     def _invalidate_path_caches(self, path: Path) -> None:
-        path = Path(path)
-        self._covars_cache.pop(path, None)
-        self._valid_keys_cache.pop(path, None)
-        self._parcel_metadata_cache.pop(path, None)
-        self._group_values_cache.pop(path, None)
+        self._data_access.invalidate_path(path)
 
     def _load_parcel_metadata_cached(self, path: Path):
-        path = Path(path)
-        if path not in self._parcel_metadata_cache:
-            self._parcel_metadata_cache[path] = _load_parcel_metadata(path)
-        return self._parcel_metadata_cache[path]
+        return self._data_access.load_parcel_metadata_cached(path)
 
     def _load_group_value_cached(self, path: Path, index: int):
-        path = Path(path)
-        if path not in self._group_values_cache:
-            try:
-                with np.load(path, allow_pickle=True) as npz:
-                    group_data = npz["group"] if "group" in npz else None
-            except Exception:
-                group_data = None
-            self._group_values_cache[path] = group_data
+        return self._data_access.load_group_value_cached(path, index)
 
-        group_data = self._group_values_cache.get(path)
-        if group_data is None:
-            return None
-        if np.isscalar(group_data):
-            return str(group_data)
-        group_arr = np.asarray(group_data)
-        if group_arr.ndim == 0:
-            return str(group_arr.item())
-        if index < 0 or index >= len(group_arr):
-            return None
-        return str(group_arr[index])
+    def _covars_info_cached(self, path: Path):
+        return self._data_access.covars_info(path)
 
     def _refresh_key_options(self, entry) -> None:
         self.key_combo.blockSignals(True)
@@ -6096,57 +6397,37 @@ class ConnectomeViewer(QMainWindow):
         self.key_combo.blockSignals(False)
 
     def _refresh_covars_options(self, source_path: Path, entry) -> None:
-        info = self._covars_cache.get(source_path)
-        if info is None:
-            info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = info
-        columns = _covars_columns(info)
+        info = self._covars_info_cached(source_path)
+        columns, selected_name = _normalize_covar_selection(
+            _covars_columns(info),
+            entry.get("covar_name"),
+        )
         # Keep legacy fields populated for compatibility with existing metadata.
         self.covar_combo.blockSignals(True)
         self.covar_combo.clear()
         for col in columns:
             self.covar_combo.addItem(col)
-        covar_name = entry.get("covar_name")
-        if covar_name and self.covar_combo.findText(covar_name) >= 0:
-            self.covar_combo.setCurrentText(covar_name)
+        if selected_name and self.covar_combo.findText(selected_name) >= 0:
+            self.covar_combo.setCurrentText(selected_name)
         self.covar_combo.blockSignals(False)
         enabled = self.covar_combo.count() > 0
         self.covar_combo.setEnabled(enabled)
         self._update_selector_prepare_button()
 
     def _default_title_for_entry(self, entry) -> str:
-        base_label = entry.get("label", "Matrix")
-        if entry.get("kind") != "file":
-            return base_label
-        sample_index = entry.get("sample_index")
-        if sample_index is None or sample_index < 0:
-            return base_label
         source_path = entry.get("path")
-        if source_path is None:
-            return base_label
-        info = self._covars_cache.get(source_path)
-        if info is None:
-            info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = info
-        if info is None:
-            return base_label
-        participant = _covars_series(info, "participant_id")
-        session = _covars_series(info, "session_id")
-        if participant is None or session is None:
-            return base_label
-        if sample_index >= len(participant) or sample_index >= len(session):
-            return base_label
-        participant_value = str(participant[sample_index])
-        session_value = str(session[sample_index])
-        group_value = self._load_group_value_cached(source_path, sample_index)
-        group, sub = _parse_participant_id(participant_value)
-        if group_value:
-            group = group_value
-        sub = _strip_prefix(sub, "sub-")
-        ses = _strip_prefix(session_value, "ses-")
-        if group:
-            return f"{group}-sub-{sub}_ses-{ses}"
-        return f"sub-{sub}_ses-{ses}"
+        sample_index = entry.get("sample_index")
+        info = self._covars_info_cached(source_path) if source_path is not None else None
+        group_value = (
+            self._load_group_value_cached(source_path, sample_index)
+            if source_path is not None and sample_index is not None and sample_index >= 0
+            else None
+        )
+        return _default_entry_title_helper(
+            entry,
+            covars_info=info,
+            group_value=group_value,
+        )
 
     def _apply_title_for_entry(self, entry, force: bool = False) -> str:
         entry_id = entry["id"]
@@ -6238,36 +6519,15 @@ class ConnectomeViewer(QMainWindow):
         self._sync_gradients_dialog_state()
 
     def _default_entry_display_settings(self):
-        return {
-            "matrix_colormap": self._default_matrix_colormap,
-            "display_auto": True,
-            "display_min_text": "",
-            "display_max_text": "",
-            "display_scale": "linear",
-        }
+        return _default_plot_display_settings(self._default_matrix_colormap)
 
     def _ensure_entry_display_settings(self, entry):
-        if entry is None:
-            return None
-        defaults = self._default_entry_display_settings()
-        available_names = self._available_colormap_names()
-        cmap_name = str(entry.get("matrix_colormap", defaults["matrix_colormap"]) or "").strip()
-        if not cmap_name or (available_names and cmap_name not in available_names):
-            if defaults["matrix_colormap"] in available_names:
-                cmap_name = defaults["matrix_colormap"]
-            elif DEFAULT_COLORMAP in available_names:
-                cmap_name = DEFAULT_COLORMAP
-            elif available_names:
-                cmap_name = available_names[0]
-            else:
-                cmap_name = defaults["matrix_colormap"]
-        entry["matrix_colormap"] = cmap_name
-        entry["display_auto"] = bool(entry.get("display_auto", defaults["display_auto"]))
-        entry["display_min_text"] = str(entry.get("display_min_text", defaults["display_min_text"]) or "").strip()
-        entry["display_max_text"] = str(entry.get("display_max_text", defaults["display_max_text"]) or "").strip()
-        scale_name = str(entry.get("display_scale", defaults["display_scale"]) or "").strip().lower()
-        entry["display_scale"] = "log" if scale_name.startswith("log") else "linear"
-        return entry
+        return _ensure_plot_display_settings(
+            entry,
+            default_matrix_colormap=self._default_matrix_colormap,
+            available_colormap_names=self._available_colormap_names(),
+            fallback_colormap=DEFAULT_COLORMAP,
+        )
 
     def _load_display_controls_for_entry(self, entry) -> None:
         if entry is None:
@@ -6369,23 +6629,11 @@ class ConnectomeViewer(QMainWindow):
             auto_scale = bool(self.display_auto_check.isChecked())
             min_text = self.display_min_edit.text().strip() if hasattr(self, "display_min_edit") else ""
             max_text = self.display_max_edit.text().strip() if hasattr(self, "display_max_edit") else ""
-        if auto_scale:
-            return None, None, None
-        vmin = None
-        vmax = None
-        if min_text:
-            try:
-                vmin = float(min_text)
-            except ValueError:
-                return None, None, "Display min must be numeric."
-        if max_text:
-            try:
-                vmax = float(max_text)
-            except ValueError:
-                return None, None, "Display max must be numeric."
-        if vmin is not None and vmax is not None and vmin >= vmax:
-            return None, None, "Display min must be smaller than max."
-        return vmin, vmax, None
+        return _parse_plot_display_limits(
+            auto_scale=auto_scale,
+            min_text=min_text,
+            max_text=max_text,
+        )
 
     def _current_display_scale(self, entry=None) -> str:
         if entry is not None:
@@ -6395,28 +6643,10 @@ class ConnectomeViewer(QMainWindow):
             if not hasattr(self, "display_scale_combo"):
                 return "linear"
             choice = self.display_scale_combo.currentText().strip().lower()
-        if choice.startswith("log"):
-            return "log"
-        return "linear"
+        return _normalize_plot_display_scale(choice)
 
     def _log_scale_error(self, matrix, vmin, vmax):
-        if matrix is None:
-            return "Log scale requires matrix values."
-        values = np.asarray(matrix, dtype=float)
-        finite = values[np.isfinite(values)]
-        if finite.size == 0:
-            return "Log scale requires finite values."
-        max_val = float(np.max(finite))
-        if max_val <= 0:
-            return "Log scale requires positive values (max > 0)."
-        min_val = float(np.min(finite))
-        if min_val < 0:
-            return "Log scale does not support negative values."
-        if vmin is not None and vmin <= 0:
-            return "Display min must be > 0 for log scale."
-        if vmax is not None and vmax <= 0:
-            return "Display max must be > 0 for log scale."
-        return None
+        return _plot_log_scale_error(matrix, vmin, vmax)
 
     def _on_display_scaling_changed(self, *_args) -> None:
         auto_scale = self.display_auto_check.isChecked()
@@ -6646,6 +6876,7 @@ class ConnectomeViewer(QMainWindow):
             entry["selected_key"] = key or None
             entry["sample_index"] = None
         self._plot_selected()
+        self._sync_combine_dialog_state()
 
     def _open_histogram(self) -> None:
         if self.file_list.count() == 0:
@@ -6656,111 +6887,25 @@ class ConnectomeViewer(QMainWindow):
         self._hist_dialog = dialog
 
     def _ensure_entry_key(self, entry):
-        if entry.get("kind") != "file":
-            return entry.get("selected_key")
-        key = entry.get("selected_key")
-        if key:
-            return key
-        valid_keys = self._get_valid_keys_cached(entry["path"])
-        if not valid_keys:
-            return None
-        entry["selected_key"] = valid_keys[0]
-        return entry["selected_key"]
+        return self._data_access.ensure_entry_key(entry)
 
     def _matrix_for_entry(self, entry):
-        if entry.get("kind") == "derived":
-            return entry.get("matrix"), entry.get("selected_key")
-        key = self._ensure_entry_key(entry)
-        if not key:
-            raise KeyError("No valid matrix key selected")
-        raw = _load_matrix_from_npz(entry["path"], key, average=False)
-        if raw.ndim == 3:
-            axis = _stack_axis(raw.shape)
-            if axis is None:
-                matrix = _average_to_square(raw)
-            else:
-                entry.setdefault("sample_index", -1)
-                entry["stack_axis"] = axis
-                entry["stack_len"] = raw.shape[axis]
-                sample_index = entry.get("sample_index", -1)
-                if sample_index is None or sample_index < 0:
-                    matrix = _average_to_square(raw)
-                else:
-                    matrix = _select_stack_slice(raw, axis, sample_index)
-        else:
-            matrix = raw
-        return matrix, key
+        return self._data_access.matrix_for_entry(entry)
 
     @staticmethod
     def _safe_name_fragment(text: str) -> str:
-        token = str(text or "").strip()
-        if not token:
-            return "matrix"
-        cleaned = []
-        for ch in token:
-            if ch.isalnum() or ch in {"-", "_"}:
-                cleaned.append(ch)
-            else:
-                cleaned.append("_")
-        out = "".join(cleaned).strip("_")
-        while "__" in out:
-            out = out.replace("__", "_")
-        return out or "matrix"
+        return _safe_name_fragment_helper(text)
 
     def _collect_export_metadata(self, entry, selected_key):
-        metadata = {}
-        labels = None
-        names = None
-
-        source_path_raw = entry.get("source_path", entry.get("path"))
-        source_path = Path(source_path_raw) if source_path_raw else None
-        if source_path is not None and source_path.exists():
-            try:
-                with np.load(source_path, allow_pickle=True) as npz:
-                    for key in PARCEL_LABEL_KEYS:
-                        if key in npz:
-                            labels = np.asarray(npz[key])
-                            break
-                    for key in PARCEL_NAME_KEYS:
-                        if key in npz:
-                            names = np.asarray(npz[key])
-                            break
-                    for key in ("group", "modality", "metabolites"):
-                        if key in npz:
-                            metadata[key] = np.asarray(npz[key])
-            except Exception:
-                pass
-
-            if labels is None or names is None:
-                try:
-                    extra_labels, extra_names = self._load_parcel_metadata_cached(source_path)
-                    if labels is None and extra_labels is not None:
-                        labels = np.asarray(extra_labels)
-                    if names is None and extra_names is not None:
-                        names = np.asarray(extra_names)
-                except Exception:
-                    pass
-
-        if labels is None and self._current_parcel_labels:
-            labels = np.asarray(self._current_parcel_labels)
-        if names is None and self._current_parcel_names:
-            names = np.asarray(self._current_parcel_names)
-
-        if labels is not None:
-            metadata["parcel_labels_group"] = labels
-        if names is not None:
-            metadata["parcel_names_group"] = names
-        if source_path is not None:
-            metadata["source_file"] = np.asarray(str(source_path))
-        if selected_key:
-            metadata["source_key"] = np.asarray(str(selected_key))
-        sample_index = entry.get("sample_index")
-        if sample_index is not None:
-            try:
-                metadata["sample_index"] = np.asarray(int(sample_index))
-            except Exception:
-                pass
-        return metadata
+        labels, names = self._entry_parcel_metadata(entry)
+        return _collect_entry_export_metadata(
+            entry,
+            selected_key,
+            labels=labels,
+            names=names,
+            current_parcel_labels=self._current_parcel_labels,
+            current_parcel_names=self._current_parcel_names,
+        )
 
     def _write_selected_matrix_to_file(self) -> None:
         entry = self._current_entry()
@@ -6959,6 +7104,7 @@ class ConnectomeViewer(QMainWindow):
         self._plot_selected()
         self._update_write_to_file_button()
         self._update_view_labels_button()
+        self._sync_combine_dialog_state()
 
     def _plot_selected(self, *_args) -> None:
         entry_id = self._current_entry_id()
@@ -6971,51 +7117,38 @@ class ConnectomeViewer(QMainWindow):
             return
         self._store_display_controls_for_entry(entry)
 
-        if entry.get("kind") == "derived":
-            matrix = entry.get("matrix")
-            key = entry.get("selected_key")
-            source_path = entry.get("source_path")
-            self._update_sample_controls(entry, None, None)
-        else:
-            key = self._ensure_entry_key(entry)
-            if not key:
-                self._clear_plot()
-                self.statusBar().showMessage("No valid matrix key selected.")
-                return
-            source_path = entry.get("path")
-            try:
-                raw = _load_matrix_from_npz(entry["path"], key, average=False)
-            except Exception as exc:
-                self._clear_plot()
-                self.statusBar().showMessage(f"Failed to load {entry.get('label', 'file')}: {exc}")
-                return
-            if raw.ndim == 3:
-                axis = _stack_axis(raw.shape)
-                if axis is None:
-                    self._update_sample_controls(entry, None, None)
-                    matrix = _average_to_square(raw)
-                else:
-                    self._update_sample_controls(entry, axis, raw.shape[axis])
-                    sample_index = entry.get("sample_index", -1)
-                    if sample_index is None or sample_index < 0:
-                        matrix = _average_to_square(raw)
-                    else:
-                        matrix = _select_stack_slice(raw, axis, sample_index)
-            else:
-                self._update_sample_controls(entry, None, None)
-                matrix = raw
+        try:
+            plot_resolution = _resolve_entry_plot(
+                entry,
+                ensure_entry_key=self._ensure_entry_key,
+                load_matrix_from_npz=_load_matrix_from_npz,
+                stack_axis=_stack_axis,
+                average_to_square=_average_to_square,
+                select_stack_slice=_select_stack_slice,
+            )
+        except KeyError:
+            self._clear_plot()
+            self.statusBar().showMessage("No valid matrix key selected.")
+            return
+        except Exception as exc:
+            self._clear_plot()
+            self.statusBar().showMessage(f"Failed to load {entry.get('label', 'file')}: {exc}")
+            return
+
+        matrix = plot_resolution.matrix
+        key = plot_resolution.key
+        source_path = plot_resolution.source_path
+        self._update_sample_controls(entry, plot_resolution.stack_axis, plot_resolution.stack_len)
 
         current_title = self._apply_title_for_entry(entry)
 
-        labels, names = (None, None)
-        if source_path:
-            labels, names = self._load_parcel_metadata_cached(source_path)
-        labels_list = _to_string_list(labels)
-        names_list = _to_string_list(names)
-        if labels_list and len(labels_list) != matrix.shape[0]:
-            labels_list = None
-        if names_list and len(names_list) != matrix.shape[0]:
-            names_list = None
+        labels, names = self._entry_parcel_metadata(entry, expected_len=matrix.shape[0])
+        labels_list, names_list = _normalize_plot_matrix_labels(
+            matrix,
+            labels,
+            names,
+            to_string_list=_to_string_list,
+        )
 
         self._current_matrix = matrix
         self._current_parcel_labels = labels_list
@@ -7089,10 +7222,7 @@ class ConnectomeViewer(QMainWindow):
         if not key:
             self.statusBar().showMessage("No valid matrix key selected.")
             return
-        info = self._covars_cache.get(source_path)
-        if info is None:
-            info = _load_covars_info(source_path)
-            self._covars_cache[source_path] = info
+        info = self._covars_info_cached(source_path)
         if info is None:
             self.statusBar().showMessage("Covars not found in file.")
             return
@@ -7168,26 +7298,20 @@ class ConnectomeViewer(QMainWindow):
             subset = matrix[:, :, indices]
             averaged = subset.mean(axis=2)
 
-        derived_id = self._new_derived_id()
         label = f"avg {covar_name}={value_text} ({Path(source_path).name})"
         covar_value = value_float if value_float is not None else value_text
-        self._entries[derived_id] = {
-            "id": derived_id,
-            "kind": "derived",
-            "matrix": averaged,
-            "source_path": source_path,
-            "selected_key": key,
-            "covar_name": covar_name,
-            "covar_value": covar_value,
-            "sample_index": None,
-            "auto_title": True,
-            "label": label,
-        }
-        self.titles[derived_id] = label
-        item = QListWidgetItem(label)
-        item.setData(USER_ROLE, derived_id)
-        self.file_list.addItem(item)
-        self.file_list.setCurrentItem(item)
+        _derived_id, entry = self._workspace.add_derived_entry(
+            averaged,
+            label=label,
+            source_path=source_path,
+            selected_key=key,
+            sample_index=None,
+            extra_fields={
+                "covar_name": covar_name,
+                "covar_value": covar_value,
+            },
+        )
+        self._add_workspace_list_item(entry, select=True)
         self.statusBar().showMessage(f"Added averaged matrix ({covar_name}={value_text}).")
 
     def _add_sample_entry(self) -> None:
@@ -7226,22 +7350,14 @@ class ConnectomeViewer(QMainWindow):
             matrix = _select_stack_slice(raw, axis, sample_index)
             label = self._default_title_for_entry(entry)
 
-        derived_id = self._new_derived_id()
-        self._entries[derived_id] = {
-            "id": derived_id,
-            "kind": "derived",
-            "matrix": matrix,
-            "source_path": source_path,
-            "selected_key": key,
-            "sample_index": sample_index,
-            "auto_title": True,
-            "label": label,
-        }
-        self.titles[derived_id] = label
-        item = QListWidgetItem(label)
-        item.setData(USER_ROLE, derived_id)
-        self.file_list.addItem(item)
-        self.file_list.setCurrentItem(item)
+        _derived_id, entry = self._workspace.add_derived_entry(
+            matrix,
+            label=label,
+            source_path=source_path,
+            selected_key=key,
+            sample_index=sample_index,
+        )
+        self._add_workspace_list_item(entry, select=True)
         self.statusBar().showMessage("Added sample matrix to list.")
 
     def _compute_gradients(self) -> None:
@@ -7278,11 +7394,11 @@ class ConnectomeViewer(QMainWindow):
             self.statusBar().showMessage("No active parcellation template.")
             return
 
+        parcel_labels, parcel_names = self._entry_parcel_metadata(entry, expected_len=conn_matrix.shape[0])
         source_path = self._gradient_entry_source_path(entry)
-        if source_path is None or not source_path.exists():
-            self.statusBar().showMessage("Projection requires a source .npz with parcel labels.")
+        if (source_path is None or not source_path.exists()) and parcel_labels is None:
+            self.statusBar().showMessage("Projection requires parcel labels for the selected matrix.")
             return
-        parcel_labels, _ = self._load_parcel_metadata_cached(source_path)
         label_indices = _coerce_label_indices(parcel_labels, conn_matrix.shape[0])
         if label_indices is None:
             self.statusBar().showMessage(
@@ -7302,8 +7418,6 @@ class ConnectomeViewer(QMainWindow):
             return
         projection_labels = [label_indices[idx] for idx in keep_indices]
 
-        _, parcel_names = self._load_parcel_metadata_cached(source_path)
-        parcel_names = _to_string_list(parcel_names)
         kept_names = None
         if parcel_names and len(parcel_names) == conn_matrix.shape[0]:
             kept_names = [parcel_names[idx] for idx in keep_indices]

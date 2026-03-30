@@ -7,147 +7,79 @@ import re
 import numpy as np
 
 try:
+    from window.shared.covariate_table import (
+        CovariateFilterPage as _CovariateFilterPage,
+        filter_row_indices as _filter_row_indices,
+        parse_filter_values as _parse_filter_values,
+    )
+    from window.shared.covars import (
+        column_is_numeric as _column_is_numeric,
+        covars_to_rows as _covars_to_rows,
+        display_text as _display_text,
+    )
+    from window.shared.matrix import stack_axis as _stack_axis
+    from window.shared.qt_flags import (
+        install_qt_compat_aliases,
+        is_editable_flag as _is_editable_flag,
+        is_enabled_flag as _is_enabled_flag,
+        is_selectable_flag as _is_selectable_flag,
+        is_user_checkable_flag as _is_user_checkable_flag,
+    )
+    from window.shared.workflow import WorkflowShell as _WorkflowShell
+except Exception:
+    from mrsi_viewer.window.shared.covariate_table import (
+        CovariateFilterPage as _CovariateFilterPage,
+        filter_row_indices as _filter_row_indices,
+        parse_filter_values as _parse_filter_values,
+    )
+    from mrsi_viewer.window.shared.covars import (
+        column_is_numeric as _column_is_numeric,
+        covars_to_rows as _covars_to_rows,
+        display_text as _display_text,
+    )
+    from mrsi_viewer.window.shared.matrix import stack_axis as _stack_axis
+    from mrsi_viewer.window.shared.qt_flags import (
+        install_qt_compat_aliases,
+        is_editable_flag as _is_editable_flag,
+        is_enabled_flag as _is_enabled_flag,
+        is_selectable_flag as _is_selectable_flag,
+        is_user_checkable_flag as _is_user_checkable_flag,
+    )
+    from mrsi_viewer.window.shared.workflow import WorkflowShell as _WorkflowShell
+
+try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import (
-        QAbstractItemView,
         QComboBox,
         QDialog,
-        QFrame,
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
         QLabel,
         QLineEdit,
         QPushButton,
-        QStackedWidget,
-        QTableWidget,
-        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
-        QHeaderView,
     )
     QT_LIB = 6
 except Exception:
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import (
-        QAbstractItemView,
         QComboBox,
         QDialog,
-        QFrame,
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
         QLabel,
         QLineEdit,
         QPushButton,
-        QStackedWidget,
-        QTableWidget,
-        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
-        QHeaderView,
     )
     QT_LIB = 5
 
 
-if QT_LIB == 6:
-    Qt.Checked = Qt.CheckState.Checked
-
-
-def _is_enabled_flag():
-    return getattr(Qt, "ItemIsEnabled", getattr(Qt.ItemFlag, "ItemIsEnabled"))
-
-
-def _is_selectable_flag():
-    return getattr(Qt, "ItemIsSelectable", getattr(Qt.ItemFlag, "ItemIsSelectable"))
-
-
-def _is_user_checkable_flag():
-    return getattr(Qt, "ItemIsUserCheckable", getattr(Qt.ItemFlag, "ItemIsUserCheckable"))
-
-
-def _is_editable_flag():
-    return getattr(Qt, "ItemIsEditable", getattr(Qt.ItemFlag, "ItemIsEditable"))
-
-
-def _decode_scalar(value):
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            return value.decode()
-        except Exception:
-            return str(value)
-    return value
-
-
-def _display_text(value):
-    value = _decode_scalar(value)
-    if value is None:
-        return ""
-    return str(value)
-
-
-def _covars_to_rows(covars_info):
-    if covars_info is None:
-        return [], []
-
-    df = covars_info.get("df")
-    if df is not None:
-        columns = [str(col) for col in df.columns]
-        records = df.to_dict(orient="records")
-        rows = []
-        for record in records:
-            rows.append({col: _decode_scalar(record.get(col)) for col in columns})
-        return columns, rows
-
-    data = covars_info.get("data")
-    if data is None:
-        return [], []
-
-    arr = np.asarray(data)
-    if getattr(arr.dtype, "names", None):
-        columns = [str(col) for col in arr.dtype.names]
-        rows = []
-        for rec in arr:
-            rows.append({col: _decode_scalar(rec[col]) for col in columns})
-        return columns, rows
-
-    if arr.ndim == 2:
-        columns = [f"col_{i}" for i in range(arr.shape[1])]
-        rows = []
-        for row in arr:
-            rows.append({columns[i]: _decode_scalar(row[i]) for i in range(arr.shape[1])})
-        return columns, rows
-
-    return [], []
-
-
-def _column_is_numeric(values):
-    has_value = False
-    for value in values:
-        text = _display_text(value).strip()
-        if text == "":
-            continue
-        has_value = True
-        try:
-            float(text)
-        except Exception:
-            return False
-    return has_value
-
-
-def _stack_axis(shape):
-    if len(shape) != 3:
-        return None
-    a, b, c = shape
-    if a == b != c:
-        return 2
-    if a == c != b:
-        return 1
-    if b == c != a:
-        return 0
-    return None
+install_qt_compat_aliases(Qt, QT_LIB)
 
 
 class SelectorPrepareDialog(QDialog):
@@ -189,33 +121,13 @@ class SelectorPrepareDialog(QDialog):
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
 
-        content_row = QHBoxLayout()
-        stepper_frame = QFrame()
-        stepper_layout = QVBoxLayout(stepper_frame)
-        stepper_layout.setContentsMargins(6, 6, 6, 6)
-        stepper_layout.setSpacing(8)
-        stepper_layout.addWidget(QLabel("Workflow"))
-
-        self._step_buttons = []
-        for idx, title in enumerate(self.STEP_TITLES):
-            button = QPushButton(f"{idx + 1}. {title}")
-            button.setObjectName("workflowStepButton")
-            button.setCheckable(True)
-            button.setMinimumHeight(36)
-            button.clicked.connect(lambda _checked=False, i=idx: self._go_to_step(i))
-            stepper_layout.addWidget(button)
-            self._step_buttons.append(button)
-        stepper_layout.addStretch(1)
-        content_row.addWidget(stepper_frame, 0)
-
-        right_layout = QVBoxLayout()
-        self.step_stack = QStackedWidget()
-        self.step_stack.addWidget(self._build_step_data())
-        self.step_stack.addWidget(self._build_step_aggregate())
-        self.step_stack.addWidget(self._build_step_export())
-        right_layout.addWidget(self.step_stack, 1)
-        content_row.addLayout(right_layout, 1)
-        root_layout.addLayout(content_row, 1)
+        self.workflow_shell = _WorkflowShell(self.STEP_TITLES, on_step_selected=self._go_to_step)
+        self._step_buttons = self.workflow_shell.step_buttons
+        self.step_stack = self.workflow_shell.step_stack
+        self.workflow_shell.add_step(self._build_step_data())
+        self.workflow_shell.add_step(self._build_step_aggregate())
+        self.workflow_shell.add_step(self._build_step_export())
+        root_layout.addWidget(self.workflow_shell, 1)
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(False)
@@ -235,58 +147,23 @@ class SelectorPrepareDialog(QDialog):
         root_layout.addLayout(actions)
 
     def _build_step_data(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        self.dataset_summary_label = QLabel("")
-        self.dataset_summary_label.setWordWrap(False)
-        self.dataset_summary_label.setText(
-            f"{self._source_path.name} | key: {self._matrix_key} | "
-            f"rows: {len(self._rows)} | covariates: {len(self._columns)}"
+        self.data_page = _CovariateFilterPage(self._columns, exclude_mode="checkbox_item")
+        self.dataset_summary_label = self.data_page.dataset_summary_label
+        self.filter_covar_combo = self.data_page.filter_covar_combo
+        self.filter_value_edit = self.data_page.filter_value_edit
+        self.filter_button = self.data_page.filter_button
+        self.filter_reset_button = self.data_page.filter_reset_button
+        self.table = self.data_page.table
+        self.showing_rows_label = self.data_page.showing_rows_label
+        self.data_page.set_dataset_summary(
+            self._source_path.name,
+            self._matrix_key,
+            len(self._rows),
+            len(self._columns),
         )
-        layout.addWidget(self.dataset_summary_label)
-
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("Covariate"))
-        self.filter_covar_combo = QComboBox()
-        self.filter_covar_combo.addItems(self._columns)
-        filter_row.addWidget(self.filter_covar_combo)
-        filter_row.addWidget(QLabel("Value"))
-        self.filter_value_edit = QLineEdit("")
-        self.filter_value_edit.setPlaceholderText("e.g. 0,1 or 32-46")
-        filter_row.addWidget(self.filter_value_edit, 1)
-        self.filter_button = QPushButton("Filter")
-        self.filter_button.clicked.connect(self._apply_filter)
-        filter_row.addWidget(self.filter_button)
-        self.filter_reset_button = QPushButton("Reset")
-        self.filter_reset_button.clicked.connect(self._reset_filter)
-        filter_row.addWidget(self.filter_reset_button)
-        layout.addLayout(filter_row)
-
-        self.table = QTableWidget()
-        self.table.setColumnCount(len(self._columns) + 1)
-        self.table.setHorizontalHeaderLabels(["Exclude"] + list(self._columns))
-        self.table.setAlternatingRowColors(True)
-        if QT_LIB == 6:
-            self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-            header = self.table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            for col_idx in range(1, len(self._columns) + 1):
-                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Stretch)
-        else:
-            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-            self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-            header = self.table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            for col_idx in range(1, len(self._columns) + 1):
-                header.setSectionResizeMode(col_idx, QHeaderView.Stretch)
+        self.data_page.set_filter_callbacks(self._apply_filter, self._reset_filter)
         self.table.itemChanged.connect(self._on_table_item_changed)
-        layout.addWidget(self.table, 1)
-
-        self.showing_rows_label = QLabel("")
-        layout.addWidget(self.showing_rows_label)
-        return page
+        return self.data_page
 
     def _build_step_aggregate(self):
         page = QWidget()
@@ -332,14 +209,8 @@ class SelectorPrepareDialog(QDialog):
         return page
 
     def _go_to_step(self, step_index):
-        step = max(0, min(int(step_index), len(self.STEP_TITLES) - 1))
+        step = self.workflow_shell.set_current_step(step_index)
         self._current_step = step
-        self.step_stack.setCurrentIndex(step)
-        for idx, button in enumerate(self._step_buttons):
-            is_current = idx == step
-            button.setChecked(is_current)
-            prefix = "▶ " if is_current else ""
-            button.setText(f"{prefix}{idx + 1}. {self.STEP_TITLES[idx]}")
         self.back_button.setEnabled(step > 0)
         self.next_button.setVisible(step < (len(self.STEP_TITLES) - 1))
 
@@ -351,55 +222,6 @@ class SelectorPrepareDialog(QDialog):
 
     def _set_status(self, text):
         self.status_label.setText(str(text))
-
-    @staticmethod
-    def _parse_filter_values(text):
-        values = [token.strip() for token in str(text).split(",")]
-        return [token for token in values if token != ""]
-
-    @classmethod
-    def _parse_numeric_filter_targets(cls, tokens):
-        exact_targets = []
-        range_targets = []
-        for token in tokens:
-            text = str(token).strip()
-            if text == "":
-                continue
-            range_match = cls.NUMERIC_RANGE_RE.match(text)
-            if range_match:
-                start = float(range_match.group(1))
-                stop = float(range_match.group(2))
-                low, high = (start, stop) if start <= stop else (stop, start)
-                range_targets.append((low, high))
-                continue
-            exact_targets.append(float(text))
-        return exact_targets, range_targets
-
-    @staticmethod
-    def _matches_numeric(value, exact_targets, range_targets):
-        try:
-            val = float(_display_text(value).strip())
-        except Exception:
-            return False
-        if any(np.isclose(val, target) for target in exact_targets):
-            return True
-        for low, high in range_targets:
-            if (val > low or np.isclose(val, low)) and (val < high or np.isclose(val, high)):
-                return True
-        return False
-
-    @staticmethod
-    def _matches_any(source_value, targets, numeric):
-        text = _display_text(source_value).strip()
-        if text == "":
-            return False
-        if numeric:
-            try:
-                value = float(text)
-            except Exception:
-                return False
-            return any(np.isclose(value, target) for target in targets)
-        return text in targets
 
     def _on_table_item_changed(self, item):
         if item is None or self._data_table_refreshing:
@@ -421,44 +243,19 @@ class SelectorPrepareDialog(QDialog):
             self._set_status("No covariates available to filter.")
             return
 
-        covar_name = self.filter_covar_combo.currentText().strip()
-        target_text = self.filter_value_edit.text().strip()
-        if not covar_name:
-            self._set_status("Select a covariate to filter.")
+        matched, target_values, error = _filter_row_indices(
+            self._rows,
+            self.filter_covar_combo.currentText(),
+            self.filter_value_edit.text(),
+            self.NUMERIC_RANGE_RE,
+        )
+        if error:
+            self._set_status(error)
             return
-        if target_text == "":
-            self._set_status("Enter a covariate value to filter.")
-            return
-        target_values = self._parse_filter_values(target_text)
-        if not target_values:
-            self._set_status("Enter at least one filter value.")
-            return
-
-        values = [row.get(covar_name) for row in self._rows]
-        numeric = _column_is_numeric(values)
-        if numeric:
-            try:
-                exact_targets, range_targets = self._parse_numeric_filter_targets(target_values)
-            except Exception:
-                self._set_status("Selected covariate is numeric. Use values like 0,1 or ranges like 32-46.")
-                return
-            if not exact_targets and not range_targets:
-                self._set_status("Enter at least one numeric value or numeric range.")
-                return
-        else:
-            filter_targets = target_values
-
-        matched = []
-        for row_idx, value in enumerate(values):
-            if numeric:
-                if self._matches_numeric(value, exact_targets, range_targets):
-                    matched.append(row_idx)
-            elif self._matches_any(value, filter_targets, numeric):
-                matched.append(row_idx)
         self._filtered_indices = matched
         self._refresh_table()
         self._set_status(
-            f"Filter applied: {covar_name} in [{', '.join(target_values)}]. "
+            f"Filter applied: {self.filter_covar_combo.currentText().strip()} in [{', '.join(target_values)}]. "
             f"Showing {len(self._filtered_indices)}/{len(self._rows)} rows."
         )
 
@@ -469,32 +266,19 @@ class SelectorPrepareDialog(QDialog):
 
     def _refresh_table(self):
         self._data_table_refreshing = True
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(self._filtered_indices))
-        enabled_flag = _is_enabled_flag()
-        selectable_flag = _is_selectable_flag()
-        checkable_flag = _is_user_checkable_flag()
-        editable_flag = _is_editable_flag()
-        for table_row, source_idx in enumerate(self._filtered_indices):
-            row_data = self._rows[source_idx]
-            include_item = QTableWidgetItem("")
-            include_item.setFlags(enabled_flag | selectable_flag | checkable_flag)
-            include_item.setCheckState(
-                Qt.Checked if source_idx in self._excluded_indices else Qt.Unchecked
-            )
-            self.table.setItem(table_row, 0, include_item)
-            for col_idx, covar_name in enumerate(self._columns, start=1):
-                item = QTableWidgetItem(_display_text(row_data.get(covar_name)))
-                item.setFlags(item.flags() & ~editable_flag)
-                self.table.setItem(table_row, col_idx, item)
-        self.table.blockSignals(False)
+        self.data_page.populate_rows(
+            self._filtered_indices,
+            self._rows,
+            self._excluded_indices,
+        )
         self._data_table_refreshing = False
         self._update_showing_rows_label()
 
     def _update_showing_rows_label(self):
-        self.showing_rows_label.setText(
-            f"Showing {len(self._filtered_indices)}/{len(self._rows)} rows | "
-            f"Included: {len(self.selected_row_indices())}"
+        self.data_page.update_showing_rows(
+            len(self._filtered_indices),
+            len(self._rows),
+            len(self.selected_row_indices()),
         )
 
     def selected_row_indices(self):
@@ -577,7 +361,7 @@ class SelectorPrepareDialog(QDialog):
             "selected_rows": self.selected_row_indices(),
             "n_total_rows": len(self._rows),
             "filter_covar": self.filter_covar_combo.currentText().strip(),
-            "filter_values": self._parse_filter_values(self.filter_value_edit.text()),
+            "filter_values": _parse_filter_values(self.filter_value_edit.text()),
         }
         if self._export_callback is None:
             self._set_status("No export callback defined.")
