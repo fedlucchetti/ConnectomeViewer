@@ -1,0 +1,2258 @@
+{
+  "brain-stem-medulla": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "brain-stem-medulla"
+    ],
+    "voxel_count": 6281
+  },
+  "brain-stem-midbrain": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "brain-stem-midbrain"
+    ],
+    "voxel_count": 7694
+  },
+  "brain-stem-pons": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "brain-stem-pons"
+    ],
+    "voxel_count": 20215
+  },
+  "brain-stem-scp": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "brain-stem-scp"
+    ],
+    "voxel_count": 251
+  },
+  "cer-lh-cerebellum": {
+    "mode": "merge_and_split",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "cer-Left *",
+      "cer-Vermis *",
+      "cer-Right *"
+    ],
+    "voxel_count": 83991
+  },
+  "cer-rh-cerebellum": {
+    "mode": "merge_and_split",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "cer-Left *",
+      "cer-Vermis *",
+      "cer-Right *"
+    ],
+    "voxel_count": 86126
+  },
+  "ctx-lh-bankssts_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-bankssts_1"
+    ],
+    "voxel_count": 5628
+  },
+  "ctx-lh-caudalanteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-caudalanteriorcingulate_1"
+    ],
+    "voxel_count": 2969
+  },
+  "ctx-lh-caudalmiddlefrontal_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-caudalmiddlefrontal_12"
+    ],
+    "voxel_count": 2016
+  },
+  "ctx-lh-caudalmiddlefrontal_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-caudalmiddlefrontal_12"
+    ],
+    "voxel_count": 2402
+  },
+  "ctx-lh-caudalmiddlefrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-caudalmiddlefrontal_3"
+    ],
+    "voxel_count": 6511
+  },
+  "ctx-lh-cuneus_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-cuneus_1"
+    ],
+    "voxel_count": 1781
+  },
+  "ctx-lh-cuneus_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-cuneus_2"
+    ],
+    "voxel_count": 2516
+  },
+  "ctx-lh-entorhinal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-entorhinal_1"
+    ],
+    "voxel_count": 3525
+  },
+  "ctx-lh-frontalpole_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-frontalpole_1"
+    ],
+    "voxel_count": 1613
+  },
+  "ctx-lh-fusiform_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-fusiform_1"
+    ],
+    "voxel_count": 3419
+  },
+  "ctx-lh-fusiform_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-fusiform_2"
+    ],
+    "voxel_count": 4511
+  },
+  "ctx-lh-fusiform_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-fusiform_3"
+    ],
+    "voxel_count": 3448
+  },
+  "ctx-lh-fusiform_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-fusiform_4"
+    ],
+    "voxel_count": 3738
+  },
+  "ctx-lh-inferiorparietal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_1"
+    ],
+    "voxel_count": 2532
+  },
+  "ctx-lh-inferiorparietal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_2"
+    ],
+    "voxel_count": 3842
+  },
+  "ctx-lh-inferiorparietal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_3"
+    ],
+    "voxel_count": 2689
+  },
+  "ctx-lh-inferiorparietal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_4"
+    ],
+    "voxel_count": 2824
+  },
+  "ctx-lh-inferiorparietal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_5"
+    ],
+    "voxel_count": 1313
+  },
+  "ctx-lh-inferiorparietal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiorparietal_6"
+    ],
+    "voxel_count": 3821
+  },
+  "ctx-lh-inferiortemporal_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiortemporal_12"
+    ],
+    "voxel_count": 4182
+  },
+  "ctx-lh-inferiortemporal_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiortemporal_12"
+    ],
+    "voxel_count": 2836
+  },
+  "ctx-lh-inferiortemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiortemporal_3"
+    ],
+    "voxel_count": 3369
+  },
+  "ctx-lh-inferiortemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-inferiortemporal_4"
+    ],
+    "voxel_count": 4292
+  },
+  "ctx-lh-insula_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-insula_1"
+    ],
+    "voxel_count": 2395
+  },
+  "ctx-lh-insula_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-insula_2"
+    ],
+    "voxel_count": 2995
+  },
+  "ctx-lh-insula_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-insula_3"
+    ],
+    "voxel_count": 3816
+  },
+  "ctx-lh-isthmuscingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-isthmuscingulate_1"
+    ],
+    "voxel_count": 3674
+  },
+  "ctx-lh-lateraloccipital_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateraloccipital_1"
+    ],
+    "voxel_count": 3087
+  },
+  "ctx-lh-lateraloccipital_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateraloccipital_2"
+    ],
+    "voxel_count": 2950
+  },
+  "ctx-lh-lateraloccipital_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateraloccipital_3"
+    ],
+    "voxel_count": 3197
+  },
+  "ctx-lh-lateraloccipital_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateraloccipital_4"
+    ],
+    "voxel_count": 4888
+  },
+  "ctx-lh-lateraloccipital_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateraloccipital_5"
+    ],
+    "voxel_count": 4822
+  },
+  "ctx-lh-lateralorbitofrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateralorbitofrontal_1"
+    ],
+    "voxel_count": 2970
+  },
+  "ctx-lh-lateralorbitofrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateralorbitofrontal_2"
+    ],
+    "voxel_count": 3465
+  },
+  "ctx-lh-lateralorbitofrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateralorbitofrontal_3"
+    ],
+    "voxel_count": 3380
+  },
+  "ctx-lh-lateralorbitofrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lateralorbitofrontal_4"
+    ],
+    "voxel_count": 2266
+  },
+  "ctx-lh-lingual_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lingual_1"
+    ],
+    "voxel_count": 2349
+  },
+  "ctx-lh-lingual_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lingual_2"
+    ],
+    "voxel_count": 1497
+  },
+  "ctx-lh-lingual_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-lingual_3"
+    ],
+    "voxel_count": 3813
+  },
+  "ctx-lh-medialorbitofrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-medialorbitofrontal_1"
+    ],
+    "voxel_count": 3279
+  },
+  "ctx-lh-medialorbitofrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-medialorbitofrontal_2"
+    ],
+    "voxel_count": 2482
+  },
+  "ctx-lh-medialorbitofrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-medialorbitofrontal_3"
+    ],
+    "voxel_count": 1026
+  },
+  "ctx-lh-middletemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-middletemporal_1"
+    ],
+    "voxel_count": 4125
+  },
+  "ctx-lh-middletemporal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-middletemporal_2"
+    ],
+    "voxel_count": 3162
+  },
+  "ctx-lh-middletemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-middletemporal_3"
+    ],
+    "voxel_count": 2792
+  },
+  "ctx-lh-middletemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-middletemporal_4"
+    ],
+    "voxel_count": 6305
+  },
+  "ctx-lh-paracentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-paracentral_1"
+    ],
+    "voxel_count": 1896
+  },
+  "ctx-lh-paracentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-paracentral_2"
+    ],
+    "voxel_count": 1506
+  },
+  "ctx-lh-paracentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-paracentral_3"
+    ],
+    "voxel_count": 1691
+  },
+  "ctx-lh-parahippocampal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parahippocampal_1"
+    ],
+    "voxel_count": 4047
+  },
+  "ctx-lh-parsopercularis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parsopercularis_1"
+    ],
+    "voxel_count": 4219
+  },
+  "ctx-lh-parsopercularis_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parsopercularis_2"
+    ],
+    "voxel_count": 2702
+  },
+  "ctx-lh-parsorbitalis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parsorbitalis_1"
+    ],
+    "voxel_count": 2793
+  },
+  "ctx-lh-parstriangularis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parstriangularis_1"
+    ],
+    "voxel_count": 1641
+  },
+  "ctx-lh-parstriangularis_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-parstriangularis_2"
+    ],
+    "voxel_count": 3777
+  },
+  "ctx-lh-pericalcarine_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-pericalcarine"
+    ],
+    "voxel_count": 1432
+  },
+  "ctx-lh-pericalcarine_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-pericalcarine"
+    ],
+    "voxel_count": 479
+  },
+  "ctx-lh-postcentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-postcentral_1"
+    ],
+    "voxel_count": 1817
+  },
+  "ctx-lh-postcentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-postcentral_2"
+    ],
+    "voxel_count": 2711
+  },
+  "ctx-lh-postcentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-postcentral_3"
+    ],
+    "voxel_count": 3337
+  },
+  "ctx-lh-postcentral_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-postcentral_4"
+    ],
+    "voxel_count": 1696
+  },
+  "ctx-lh-postcentral_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-postcentral_5"
+    ],
+    "voxel_count": 3131
+  },
+  "ctx-lh-posteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-posteriorcingulate_1"
+    ],
+    "voxel_count": 2065
+  },
+  "ctx-lh-posteriorcingulate_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-posteriorcingulate_2"
+    ],
+    "voxel_count": 2754
+  },
+  "ctx-lh-precentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_1"
+    ],
+    "voxel_count": 2905
+  },
+  "ctx-lh-precentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_2"
+    ],
+    "voxel_count": 2813
+  },
+  "ctx-lh-precentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_3"
+    ],
+    "voxel_count": 2616
+  },
+  "ctx-lh-precentral_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_4"
+    ],
+    "voxel_count": 3076
+  },
+  "ctx-lh-precentral_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_5"
+    ],
+    "voxel_count": 3645
+  },
+  "ctx-lh-precentral_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precentral_6"
+    ],
+    "voxel_count": 3111
+  },
+  "ctx-lh-precuneus_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precuneus_1"
+    ],
+    "voxel_count": 1376
+  },
+  "ctx-lh-precuneus_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precuneus_2"
+    ],
+    "voxel_count": 2063
+  },
+  "ctx-lh-precuneus_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precuneus_3"
+    ],
+    "voxel_count": 2963
+  },
+  "ctx-lh-precuneus_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precuneus_4"
+    ],
+    "voxel_count": 4276
+  },
+  "ctx-lh-precuneus_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-precuneus_5"
+    ],
+    "voxel_count": 3692
+  },
+  "ctx-lh-rostralanteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralanteriorcingulate_1"
+    ],
+    "voxel_count": 4418
+  },
+  "ctx-lh-rostralmiddlefrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_1"
+    ],
+    "voxel_count": 4526
+  },
+  "ctx-lh-rostralmiddlefrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_2"
+    ],
+    "voxel_count": 4002
+  },
+  "ctx-lh-rostralmiddlefrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_3"
+    ],
+    "voxel_count": 6269
+  },
+  "ctx-lh-rostralmiddlefrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_4"
+    ],
+    "voxel_count": 4195
+  },
+  "ctx-lh-rostralmiddlefrontal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_5"
+    ],
+    "voxel_count": 2704
+  },
+  "ctx-lh-rostralmiddlefrontal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-rostralmiddlefrontal_6"
+    ],
+    "voxel_count": 3796
+  },
+  "ctx-lh-superiorfrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_1"
+    ],
+    "voxel_count": 4844
+  },
+  "ctx-lh-superiorfrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_2"
+    ],
+    "voxel_count": 6988
+  },
+  "ctx-lh-superiorfrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_3"
+    ],
+    "voxel_count": 5308
+  },
+  "ctx-lh-superiorfrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_4"
+    ],
+    "voxel_count": 4368
+  },
+  "ctx-lh-superiorfrontal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_5"
+    ],
+    "voxel_count": 5429
+  },
+  "ctx-lh-superiorfrontal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_6"
+    ],
+    "voxel_count": 4150
+  },
+  "ctx-lh-superiorfrontal_7": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_7"
+    ],
+    "voxel_count": 2575
+  },
+  "ctx-lh-superiorfrontal_8": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorfrontal_8"
+    ],
+    "voxel_count": 2701
+  },
+  "ctx-lh-superiorparietal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_1"
+    ],
+    "voxel_count": 4117
+  },
+  "ctx-lh-superiorparietal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_2"
+    ],
+    "voxel_count": 2197
+  },
+  "ctx-lh-superiorparietal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_3"
+    ],
+    "voxel_count": 3721
+  },
+  "ctx-lh-superiorparietal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_4"
+    ],
+    "voxel_count": 3188
+  },
+  "ctx-lh-superiorparietal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_5"
+    ],
+    "voxel_count": 2247
+  },
+  "ctx-lh-superiorparietal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_6"
+    ],
+    "voxel_count": 2571
+  },
+  "ctx-lh-superiorparietal_7": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiorparietal_7"
+    ],
+    "voxel_count": 3619
+  },
+  "ctx-lh-superiortemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiortemporal_1"
+    ],
+    "voxel_count": 5210
+  },
+  "ctx-lh-superiortemporal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiortemporal_2"
+    ],
+    "voxel_count": 2998
+  },
+  "ctx-lh-superiortemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiortemporal_3"
+    ],
+    "voxel_count": 2845
+  },
+  "ctx-lh-superiortemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiortemporal_4"
+    ],
+    "voxel_count": 1900
+  },
+  "ctx-lh-superiortemporal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-superiortemporal_5"
+    ],
+    "voxel_count": 6108
+  },
+  "ctx-lh-supramarginal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-supramarginal_1"
+    ],
+    "voxel_count": 2246
+  },
+  "ctx-lh-supramarginal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-supramarginal_2"
+    ],
+    "voxel_count": 5020
+  },
+  "ctx-lh-supramarginal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-supramarginal_3"
+    ],
+    "voxel_count": 6103
+  },
+  "ctx-lh-supramarginal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-supramarginal_4"
+    ],
+    "voxel_count": 2899
+  },
+  "ctx-lh-temporalpole_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-temporalpole_1"
+    ],
+    "voxel_count": 3686
+  },
+  "ctx-lh-transversetemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-lh-transversetemporal_1"
+    ],
+    "voxel_count": 1620
+  },
+  "ctx-rh-bankssts_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-bankssts_1"
+    ],
+    "voxel_count": 3282
+  },
+  "ctx-rh-caudalanteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-caudalanteriorcingulate_1"
+    ],
+    "voxel_count": 3415
+  },
+  "ctx-rh-caudalmiddlefrontal_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-caudalmiddlefrontal_12"
+    ],
+    "voxel_count": 1038
+  },
+  "ctx-rh-caudalmiddlefrontal_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-caudalmiddlefrontal_12"
+    ],
+    "voxel_count": 1851
+  },
+  "ctx-rh-caudalmiddlefrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-caudalmiddlefrontal_3"
+    ],
+    "voxel_count": 5771
+  },
+  "ctx-rh-cuneus_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-cuneus_1"
+    ],
+    "voxel_count": 1716
+  },
+  "ctx-rh-cuneus_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-cuneus_2"
+    ],
+    "voxel_count": 1963
+  },
+  "ctx-rh-entorhinal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-entorhinal_1"
+    ],
+    "voxel_count": 3701
+  },
+  "ctx-rh-frontalpole_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-frontalpole_1"
+    ],
+    "voxel_count": 1363
+  },
+  "ctx-rh-fusiform_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-fusiform_1"
+    ],
+    "voxel_count": 3039
+  },
+  "ctx-rh-fusiform_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-fusiform_2"
+    ],
+    "voxel_count": 4034
+  },
+  "ctx-rh-fusiform_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-fusiform_3"
+    ],
+    "voxel_count": 3095
+  },
+  "ctx-rh-fusiform_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-fusiform_4"
+    ],
+    "voxel_count": 3449
+  },
+  "ctx-rh-inferiorparietal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_1"
+    ],
+    "voxel_count": 2294
+  },
+  "ctx-rh-inferiorparietal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_2"
+    ],
+    "voxel_count": 4408
+  },
+  "ctx-rh-inferiorparietal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_3"
+    ],
+    "voxel_count": 1823
+  },
+  "ctx-rh-inferiorparietal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_4"
+    ],
+    "voxel_count": 2726
+  },
+  "ctx-rh-inferiorparietal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_5"
+    ],
+    "voxel_count": 4012
+  },
+  "ctx-rh-inferiorparietal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiorparietal_6"
+    ],
+    "voxel_count": 5123
+  },
+  "ctx-rh-inferiortemporal_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiortemporal_12"
+    ],
+    "voxel_count": 4786
+  },
+  "ctx-rh-inferiortemporal_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiortemporal_12"
+    ],
+    "voxel_count": 2880
+  },
+  "ctx-rh-inferiortemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiortemporal_3"
+    ],
+    "voxel_count": 2896
+  },
+  "ctx-rh-inferiortemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-inferiortemporal_4"
+    ],
+    "voxel_count": 5759
+  },
+  "ctx-rh-insula_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-insula_1"
+    ],
+    "voxel_count": 2105
+  },
+  "ctx-rh-insula_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-insula_2"
+    ],
+    "voxel_count": 3000
+  },
+  "ctx-rh-insula_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-insula_3"
+    ],
+    "voxel_count": 3546
+  },
+  "ctx-rh-isthmuscingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-isthmuscingulate_1"
+    ],
+    "voxel_count": 2448
+  },
+  "ctx-rh-lateraloccipital_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateraloccipital_1"
+    ],
+    "voxel_count": 2659
+  },
+  "ctx-rh-lateraloccipital_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateraloccipital_2"
+    ],
+    "voxel_count": 4141
+  },
+  "ctx-rh-lateraloccipital_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateraloccipital_3"
+    ],
+    "voxel_count": 3248
+  },
+  "ctx-rh-lateraloccipital_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateraloccipital_4"
+    ],
+    "voxel_count": 5678
+  },
+  "ctx-rh-lateraloccipital_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateraloccipital_5"
+    ],
+    "voxel_count": 5763
+  },
+  "ctx-rh-lateralorbitofrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateralorbitofrontal_1"
+    ],
+    "voxel_count": 2929
+  },
+  "ctx-rh-lateralorbitofrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateralorbitofrontal_2"
+    ],
+    "voxel_count": 3730
+  },
+  "ctx-rh-lateralorbitofrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateralorbitofrontal_3"
+    ],
+    "voxel_count": 2909
+  },
+  "ctx-rh-lateralorbitofrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lateralorbitofrontal_4"
+    ],
+    "voxel_count": 1492
+  },
+  "ctx-rh-lingual_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lingual_1"
+    ],
+    "voxel_count": 3264
+  },
+  "ctx-rh-lingual_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lingual_2"
+    ],
+    "voxel_count": 1811
+  },
+  "ctx-rh-lingual_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-lingual_3"
+    ],
+    "voxel_count": 2988
+  },
+  "ctx-rh-medialorbitofrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-medialorbitofrontal_1"
+    ],
+    "voxel_count": 3231
+  },
+  "ctx-rh-medialorbitofrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-medialorbitofrontal_2"
+    ],
+    "voxel_count": 1942
+  },
+  "ctx-rh-medialorbitofrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-medialorbitofrontal_3"
+    ],
+    "voxel_count": 1781
+  },
+  "ctx-rh-middletemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-middletemporal_1"
+    ],
+    "voxel_count": 5855
+  },
+  "ctx-rh-middletemporal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-middletemporal_2"
+    ],
+    "voxel_count": 3386
+  },
+  "ctx-rh-middletemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-middletemporal_3"
+    ],
+    "voxel_count": 3720
+  },
+  "ctx-rh-middletemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-middletemporal_4"
+    ],
+    "voxel_count": 5008
+  },
+  "ctx-rh-paracentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-paracentral_1"
+    ],
+    "voxel_count": 1747
+  },
+  "ctx-rh-paracentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-paracentral_2"
+    ],
+    "voxel_count": 2578
+  },
+  "ctx-rh-paracentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-paracentral_3"
+    ],
+    "voxel_count": 1767
+  },
+  "ctx-rh-parahippocampal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parahippocampal_1"
+    ],
+    "voxel_count": 3640
+  },
+  "ctx-rh-parsopercularis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parsopercularis_1"
+    ],
+    "voxel_count": 2531
+  },
+  "ctx-rh-parsopercularis_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parsopercularis_2"
+    ],
+    "voxel_count": 2170
+  },
+  "ctx-rh-parsorbitalis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parsorbitalis_1"
+    ],
+    "voxel_count": 4534
+  },
+  "ctx-rh-parstriangularis_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parstriangularis_1"
+    ],
+    "voxel_count": 1746
+  },
+  "ctx-rh-parstriangularis_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-parstriangularis_2"
+    ],
+    "voxel_count": 5021
+  },
+  "ctx-rh-pericalcarine_1": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-pericalcarine"
+    ],
+    "voxel_count": 1466
+  },
+  "ctx-rh-pericalcarine_2": {
+    "mode": "split_by_coords",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-pericalcarine"
+    ],
+    "voxel_count": 1036
+  },
+  "ctx-rh-postcentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-postcentral_1"
+    ],
+    "voxel_count": 2125
+  },
+  "ctx-rh-postcentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-postcentral_2"
+    ],
+    "voxel_count": 2133
+  },
+  "ctx-rh-postcentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-postcentral_3"
+    ],
+    "voxel_count": 3015
+  },
+  "ctx-rh-postcentral_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-postcentral_4"
+    ],
+    "voxel_count": 3031
+  },
+  "ctx-rh-postcentral_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-postcentral_5"
+    ],
+    "voxel_count": 3382
+  },
+  "ctx-rh-posteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-posteriorcingulate_1"
+    ],
+    "voxel_count": 2528
+  },
+  "ctx-rh-posteriorcingulate_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-posteriorcingulate_2"
+    ],
+    "voxel_count": 2062
+  },
+  "ctx-rh-precentral_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_1"
+    ],
+    "voxel_count": 2446
+  },
+  "ctx-rh-precentral_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_2"
+    ],
+    "voxel_count": 2275
+  },
+  "ctx-rh-precentral_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_3"
+    ],
+    "voxel_count": 3253
+  },
+  "ctx-rh-precentral_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_4"
+    ],
+    "voxel_count": 4161
+  },
+  "ctx-rh-precentral_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_5"
+    ],
+    "voxel_count": 3595
+  },
+  "ctx-rh-precentral_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precentral_6"
+    ],
+    "voxel_count": 3565
+  },
+  "ctx-rh-precuneus_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precuneus_1"
+    ],
+    "voxel_count": 2041
+  },
+  "ctx-rh-precuneus_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precuneus_2"
+    ],
+    "voxel_count": 2406
+  },
+  "ctx-rh-precuneus_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precuneus_3"
+    ],
+    "voxel_count": 2635
+  },
+  "ctx-rh-precuneus_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precuneus_4"
+    ],
+    "voxel_count": 4251
+  },
+  "ctx-rh-precuneus_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-precuneus_5"
+    ],
+    "voxel_count": 3915
+  },
+  "ctx-rh-rostralanteriorcingulate_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralanteriorcingulate_1"
+    ],
+    "voxel_count": 3721
+  },
+  "ctx-rh-rostralmiddlefrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_1"
+    ],
+    "voxel_count": 5260
+  },
+  "ctx-rh-rostralmiddlefrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_2"
+    ],
+    "voxel_count": 4152
+  },
+  "ctx-rh-rostralmiddlefrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_3"
+    ],
+    "voxel_count": 6155
+  },
+  "ctx-rh-rostralmiddlefrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_4"
+    ],
+    "voxel_count": 4307
+  },
+  "ctx-rh-rostralmiddlefrontal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_5"
+    ],
+    "voxel_count": 2802
+  },
+  "ctx-rh-rostralmiddlefrontal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-rostralmiddlefrontal_6"
+    ],
+    "voxel_count": 3488
+  },
+  "ctx-rh-superiorfrontal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_1"
+    ],
+    "voxel_count": 4215
+  },
+  "ctx-rh-superiorfrontal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_2"
+    ],
+    "voxel_count": 5194
+  },
+  "ctx-rh-superiorfrontal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_3"
+    ],
+    "voxel_count": 5566
+  },
+  "ctx-rh-superiorfrontal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_4"
+    ],
+    "voxel_count": 5188
+  },
+  "ctx-rh-superiorfrontal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_5"
+    ],
+    "voxel_count": 5192
+  },
+  "ctx-rh-superiorfrontal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_6"
+    ],
+    "voxel_count": 3698
+  },
+  "ctx-rh-superiorfrontal_7": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_7"
+    ],
+    "voxel_count": 1974
+  },
+  "ctx-rh-superiorfrontal_8": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorfrontal_8"
+    ],
+    "voxel_count": 3462
+  },
+  "ctx-rh-superiorparietal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_1"
+    ],
+    "voxel_count": 2144
+  },
+  "ctx-rh-superiorparietal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_2"
+    ],
+    "voxel_count": 2221
+  },
+  "ctx-rh-superiorparietal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_3"
+    ],
+    "voxel_count": 2707
+  },
+  "ctx-rh-superiorparietal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_4"
+    ],
+    "voxel_count": 2528
+  },
+  "ctx-rh-superiorparietal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_5"
+    ],
+    "voxel_count": 3594
+  },
+  "ctx-rh-superiorparietal_6": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_6"
+    ],
+    "voxel_count": 2833
+  },
+  "ctx-rh-superiorparietal_7": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiorparietal_7"
+    ],
+    "voxel_count": 2998
+  },
+  "ctx-rh-superiortemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiortemporal_1"
+    ],
+    "voxel_count": 3533
+  },
+  "ctx-rh-superiortemporal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiortemporal_2"
+    ],
+    "voxel_count": 3278
+  },
+  "ctx-rh-superiortemporal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiortemporal_3"
+    ],
+    "voxel_count": 3215
+  },
+  "ctx-rh-superiortemporal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiortemporal_4"
+    ],
+    "voxel_count": 1868
+  },
+  "ctx-rh-superiortemporal_5": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-superiortemporal_5"
+    ],
+    "voxel_count": 4602
+  },
+  "ctx-rh-supramarginal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-supramarginal_1"
+    ],
+    "voxel_count": 2271
+  },
+  "ctx-rh-supramarginal_2": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-supramarginal_2"
+    ],
+    "voxel_count": 4997
+  },
+  "ctx-rh-supramarginal_3": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-supramarginal_3"
+    ],
+    "voxel_count": 3485
+  },
+  "ctx-rh-supramarginal_4": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-supramarginal_4"
+    ],
+    "voxel_count": 4449
+  },
+  "ctx-rh-temporalpole_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-temporalpole_1"
+    ],
+    "voxel_count": 3044
+  },
+  "ctx-rh-transversetemporal_1": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "ctx-rh-transversetemporal_1"
+    ],
+    "voxel_count": 1773
+  },
+  "hipp-lh-hippocampus_ca1": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 1142
+  },
+  "hipp-lh-hippocampus_ca3": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 124
+  },
+  "hipp-lh-hippocampus_ca4": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 384
+  },
+  "hipp-lh-hippocampus_fimbria": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 221
+  },
+  "hipp-lh-hippocampus_gcdg": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 330
+  },
+  "hipp-lh-hippocampus_hata": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 40
+  },
+  "hipp-lh-hippocampus_hippocampal_fissure": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 63
+  },
+  "hipp-lh-hippocampus_molecular_layer_hp": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 662
+  },
+  "hipp-lh-hippocampus_parasubiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 91
+  },
+  "hipp-lh-hippocampus_presubiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 264
+  },
+  "hipp-lh-hippocampus_subiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 449
+  },
+  "hipp-lh-hippocampus_tail": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-lh"
+    ],
+    "voxel_count": 564
+  },
+  "hipp-rh-hippocampus_ca1": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 830
+  },
+  "hipp-rh-hippocampus_ca3": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 59
+  },
+  "hipp-rh-hippocampus_ca4": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 296
+  },
+  "hipp-rh-hippocampus_fimbria": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 214
+  },
+  "hipp-rh-hippocampus_gcdg": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 263
+  },
+  "hipp-rh-hippocampus_hata": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 19
+  },
+  "hipp-rh-hippocampus_hippocampal_fissure": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 119
+  },
+  "hipp-rh-hippocampus_molecular_layer_hp": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 568
+  },
+  "hipp-rh-hippocampus_parasubiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 71
+  },
+  "hipp-rh-hippocampus_presubiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 333
+  },
+  "hipp-rh-hippocampus_subiculum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 748
+  },
+  "hipp-rh-hippocampus_tail": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hipp-rh"
+    ],
+    "voxel_count": 762
+  },
+  "hypo-lh-hypothalamus": {
+    "mode": "merge",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hypo-lh-anterior-inferior",
+      "hypo-lh-anterior-superior",
+      "hypo-lh-posterior",
+      "hypo-lh-tubular-inferior",
+      "hypo-lh-tubular-superior"
+    ],
+    "voxel_count": 550
+  },
+  "hypo-rh-hypothalamus": {
+    "mode": "merge",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "hypo-rh-anterior-inferior",
+      "hypo-rh-anterior-superior",
+      "hypo-rh-posterior",
+      "hypo-rh-tubular-inferior",
+      "hypo-rh-tubular-superior"
+    ],
+    "voxel_count": 563
+  },
+  "subc-lh-accumbens_area": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-lh-pallidum_accumbens"
+    ],
+    "voxel_count": 758
+  },
+  "subc-lh-amygdala": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "amygd-lh"
+    ],
+    "voxel_count": 2270
+  },
+  "subc-lh-caudate": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-lh-caudate"
+    ],
+    "voxel_count": 5655
+  },
+  "subc-lh-hippocampus": {
+    "mode": "seed_within_split_hippocampus",
+    "seed_voxel": [
+      70,
+      108,
+      59
+    ],
+    "source": "chimera-LFMIHIFIS-3",
+    "voxel_count": 1
+  },
+  "subc-lh-pallidum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-lh-pallidum_accumbens"
+    ],
+    "voxel_count": 2467
+  },
+  "subc-lh-putamen": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-lh-putamen"
+    ],
+    "voxel_count": 6696
+  },
+  "subc-rh-accumbens_area": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-rh-pallidum_accumbens"
+    ],
+    "voxel_count": 1079
+  },
+  "subc-rh-amygdala": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "amygd-rh"
+    ],
+    "voxel_count": 2214
+  },
+  "subc-rh-caudate": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-rh-caudate"
+    ],
+    "voxel_count": 5792
+  },
+  "subc-rh-hippocampus": {
+    "mode": "seed_within_split_hippocampus",
+    "seed_voxel": [
+      125,
+      110,
+      59
+    ],
+    "source": "chimera-LFMIHIFIS-3",
+    "voxel_count": 1
+  },
+  "subc-rh-pallidum": {
+    "mode": "split_with_reference",
+    "reference": "chimera-LFIIIIFIS-3",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-rh-pallidum_accumbens"
+    ],
+    "voxel_count": 2530
+  },
+  "subc-rh-putamen": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "subc-rh-putamen"
+    ],
+    "voxel_count": 6885
+  },
+  "thal-lh-lateral_posterior_ventral_posterior_group": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-lateral-posterior-ventral-posterior-group"
+    ],
+    "voxel_count": 1453
+  },
+  "thal-lh-medial_pulvinar_centrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-pulvinar-medial-centrolateral-group"
+    ],
+    "voxel_count": 864
+  },
+  "thal-lh-mediodorsal": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-mediodorsal"
+    ],
+    "voxel_count": 1248
+  },
+  "thal-lh-pulvinar": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-pulvinar"
+    ],
+    "voxel_count": 1190
+  },
+  "thal-lh-ventral_anterior": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-ventral-anterior"
+    ],
+    "voxel_count": 1244
+  },
+  "thal-lh-ventral_posterior_ventrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-ventral-posterior-ventrolateral-group"
+    ],
+    "voxel_count": 498
+  },
+  "thal-lh-ventrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-lh-ventrolateral"
+    ],
+    "voxel_count": 1793
+  },
+  "thal-rh-lateral_posterior_ventral_posterior_group": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-lateral-posterior-ventral-posterior-group"
+    ],
+    "voxel_count": 1343
+  },
+  "thal-rh-medial_pulvinar_centrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-pulvinar-medial-centrolateral-group"
+    ],
+    "voxel_count": 697
+  },
+  "thal-rh-mediodorsal": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-mediodorsal"
+    ],
+    "voxel_count": 914
+  },
+  "thal-rh-pulvinar": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-pulvinar"
+    ],
+    "voxel_count": 1487
+  },
+  "thal-rh-ventral_anterior": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-ventral-anterior"
+    ],
+    "voxel_count": 1288
+  },
+  "thal-rh-ventral_posterior_ventrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-ventral-posterior-ventrolateral-group"
+    ],
+    "voxel_count": 705
+  },
+  "thal-rh-ventrolateral": {
+    "mode": "direct",
+    "source": "chimera-LFMIHIFIS-3",
+    "source_names": [
+      "thal-rh-ventrolateral"
+    ],
+    "voxel_count": 1585
+  },
+  "vdc-lh-ventraldc": {
+    "mode": "seed_from_neighboring_subcortex",
+    "seed_voxel": [
+      81,
+      114,
+      68
+    ],
+    "source": "chimera-LFMIHIFIS-3",
+    "voxel_count": 1
+  },
+  "vdc-rh-ventraldc": {
+    "mode": "seed_from_neighboring_subcortex",
+    "seed_voxel": [
+      114,
+      114,
+      68
+    ],
+    "source": "chimera-LFMIHIFIS-3",
+    "voxel_count": 1
+  }
+}
