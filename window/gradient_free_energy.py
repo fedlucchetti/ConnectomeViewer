@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Free-energy order plot dialog for gradient path analysis."""
+
+from pathlib import Path
+
+import numpy as np
+from matplotlib.figure import Figure
+
+try:
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+except Exception:
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+
+try:
+    from PyQt6.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+except Exception:
+    from PyQt5.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+try:
+    from window.shared.theme import dialog_theme_stylesheet as _shared_dialog_theme_stylesheet
+except Exception:
+    from mrsi_viewer.window.shared.theme import dialog_theme_stylesheet as _shared_dialog_theme_stylesheet
+
+
+def _dialog_theme_stylesheet(theme_name="Dark"):
+    return _shared_dialog_theme_stylesheet(theme_name)
+
+
+class GradientFreeEnergyDialog(QDialog):
+    """Order-plot viewer for path directionality energies and free energies."""
+
+    def __init__(self, payload, *, parent=None, theme_name="Dark"):
+        super().__init__(parent)
+        self._payload = dict(payload or {})
+        self._theme_name = "Dark"
+        self.setWindowTitle(f"Free Energy - {str(self._payload.get('title', 'Gradients'))}")
+
+        self.figure = Figure(figsize=(11.2, 6.8), constrained_layout=True)
+        self.canvas = FigureCanvas(self.figure)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+
+        lambda_value = float(self._payload.get("lambda", 1.0))
+        axis_text = f"{str(self._payload.get('y_axis_label', 'Y'))} vs {str(self._payload.get('x_axis_label', 'X'))}"
+        include_line_proximity = bool(self._payload.get("use_line_proximity_energy", True))
+        if include_line_proximity:
+            energy_text = "Energy = sum((1 - step_unit dot ref_unit) + d_line / |ref|)"
+        else:
+            energy_text = "Energy = sum(1 - step_unit dot ref_unit)"
+        self.info_label = QLabel(
+            f"lambda = {lambda_value:.3f} | {energy_text} | {axis_text}"
+        )
+        self.save_button = QPushButton("Save Figure")
+        self.save_button.clicked.connect(self._save_figure)
+
+        controls = QHBoxLayout()
+        controls.addWidget(self.info_label, 1)
+        controls.addWidget(self.save_button, 0)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(controls)
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.canvas, 1)
+
+        self.set_theme(theme_name)
+        self._render()
+
+    def set_theme(self, theme_name="Dark"):
+        theme, style = _dialog_theme_stylesheet(theme_name)
+        self._theme_name = theme
+        self.setStyleSheet(style)
+
+    def _render(self):
+        self.figure.clear()
+        groups = [dict(group) for group in list(self._payload.get("groups", []))]
+        if not groups:
+            ax = self.figure.add_subplot(111)
+            ax.text(0.5, 0.5, "No free-energy paths available.", ha="center", va="center")
+            ax.axis("off")
+            self.canvas.draw_idle()
+            return
+
+        n_rows = len(groups)
+        n_cols = max(1, max(len(list(dict(group).get("families", []))) for group in groups))
+        axes = np.asarray(self.figure.subplots(n_rows, n_cols, squeeze=False), dtype=object)
+        title_text = str(self._payload.get("title", "Gradients"))
+        rotation_text = str(self._payload.get("rotation", "Default"))
+        self.figure.suptitle(f"Free Energy Order Plot - {title_text} | Rotation: {rotation_text}", fontsize=12)
+
+        for row_idx, group in enumerate(groups):
+            families = [dict(family) for family in list(group.get("families", []))]
+            for col_idx in range(n_cols):
+                ax = axes[row_idx, col_idx]
+                if col_idx >= len(families):
+                    ax.axis("off")
+                    continue
+                family = families[col_idx]
+                energies = np.sort(np.asarray(family.get("energies", []), dtype=float).reshape(-1))
+                if energies.size == 0:
+                    ax.text(0.5, 0.5, "No paths", ha="center", va="center")
+                    ax.axis("off")
+                    continue
+                x_order = np.arange(1, energies.size + 1, dtype=int)
+                color = np.asarray(family.get("color", (0.2, 0.2, 0.2)), dtype=float).reshape(-1)
+                if color.shape != (3,):
+                    color = np.asarray((0.2, 0.2, 0.2), dtype=float)
+                free_energy = float(family.get("free_energy", float("nan")))
+                ax.plot(
+                    x_order,
+                    energies,
+                    color=tuple(color.tolist()),
+                    marker="o",
+                    markersize=3.8,
+                    linewidth=1.2,
+                    alpha=0.95,
+                )
+                if np.isfinite(free_energy):
+                    ax.axhline(
+                        free_energy,
+                        color=tuple(color.tolist()),
+                        linestyle="--",
+                        linewidth=1.0,
+                        alpha=0.7,
+                    )
+                ax.set_title(
+                    f"{str(group.get('group', 'all')).upper()} | {str(family.get('label', 'path'))}\n"
+                    f"F={free_energy:.4f} | n={int(family.get('n_paths', energies.size))}",
+                    fontsize=10,
+                )
+                ax.set_xlabel("Ordered path rank")
+                ax.set_ylabel("Energy")
+                ax.grid(True, alpha=0.25)
+
+        self.canvas.draw_idle()
+
+    def _save_figure(self):
+        default_name = "gradient_free_energy.png"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save free-energy figure",
+            str(Path.cwd() / default_name),
+            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
+        )
+        if not path:
+            return
+        output_path = Path(path)
+        if output_path.suffix.lower() not in {".png", ".pdf", ".svg"}:
+            if "PDF" in selected_filter:
+                output_path = output_path.with_suffix(".pdf")
+            elif "SVG" in selected_filter:
+                output_path = output_path.with_suffix(".svg")
+            else:
+                output_path = output_path.with_suffix(".png")
+        self.figure.savefig(str(output_path), dpi=200, bbox_inches="tight")
+
+
+__all__ = ["GradientFreeEnergyDialog"]

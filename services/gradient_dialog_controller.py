@@ -1248,6 +1248,14 @@ class GradientDialogController:
                     row_dicts = [{} for _ in range(n_rows)]
                     covars_columns = []
 
+                dialog_rows = []
+                for row_index, row_data in enumerate(row_dicts):
+                    payload_row = {"__row_index__": int(row_index)}
+                    payload_row.update(
+                        {str(key): _display_text(value) for key, value in dict(row_data).items()}
+                    )
+                    dialog_rows.append(payload_row)
+
                 def _merge_vector_column(column_name: str, values, *, overwrite: bool = False) -> None:
                     if values is None or len(values) != n_rows:
                         return
@@ -1297,6 +1305,7 @@ class GradientDialogController:
             "parcel_names": list(parcel_names),
             "covars_columns": [str(column) for column in covars_columns],
             "covars_rows": row_dicts,
+            "dialog_covars_rows": dialog_rows,
             "parcellation_path": parcellation_path,
         }
 
@@ -1721,14 +1730,9 @@ class GradientDialogController:
         )
         dialog.set_precomputed_mode(precomputed_bundle is not None)
         if precomputed_bundle is not None:
-            row_payload = []
-            for row_index, row_data in enumerate(list(precomputed_bundle.get("covars_rows") or [])):
-                payload_row = {"__row_index__": row_index}
-                payload_row.update({str(key): _display_text(value) for key, value in dict(row_data).items()})
-                row_payload.append(payload_row)
             dialog.set_precomputed_rows(
                 precomputed_bundle.get("covars_columns") or [],
-                row_payload,
+                precomputed_bundle.get("dialog_covars_rows") or [],
                 selected_row=self._gradient_precomputed_selected_row,
                 summary_text=precomputed_bundle.get("summary", ""),
                 selection_text=self._gradient_precomputed_selection_text(),
@@ -2770,6 +2774,7 @@ class GradientDialogController:
                 y_values[finite_mask],
                 color_values=class_component_values[finite_mask],
                 gradient1_values=np.asarray(axis_gradients[:, 0], dtype=float)[finite_mask],
+                path_metric_coords=np.asarray(axis_gradients, dtype=float)[finite_mask],
                 point_labels=point_labels[finite_mask],
                 point_ids=scatter_projection_labels,
                 title=scatter_title,
@@ -2786,7 +2791,7 @@ class GradientDialogController:
                 edge_pairs=edge_pairs,
                 point_group_codes=scatter_hemisphere_codes,
                 hemisphere_mode=hemisphere_mode,
-                show_proximity_circles=True,
+                show_proximity_circles=False,
                 initial_proximity_slider_value=1000,
                 use_line_proximity_energy=False,
                 project_paths_callback=_project_paths_callback,

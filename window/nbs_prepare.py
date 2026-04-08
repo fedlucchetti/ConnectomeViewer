@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """NBS preparation dialog for covariate role selection and row filtering."""
 
+import csv
 import json
 import os
 import re
@@ -58,6 +59,7 @@ except Exception:
 
 try:
     from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+    from PyQt6.QtGui import QPixmap
     from PyQt6.QtWidgets import (
         QAbstractItemView,
         QCheckBox,
@@ -72,9 +74,11 @@ try:
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QMessageBox,
         QPlainTextEdit,
         QProgressBar,
         QPushButton,
+        QScrollArea,
         QSplitter,
         QSpinBox,
         QTableWidget,
@@ -85,6 +89,7 @@ try:
     QT_LIB = 6
 except Exception:
     from PyQt5.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+    from PyQt5.QtGui import QPixmap
     from PyQt5.QtWidgets import (
         QAbstractItemView,
         QCheckBox,
@@ -99,9 +104,11 @@ except Exception:
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QMessageBox,
         QPlainTextEdit,
         QProgressBar,
         QPushButton,
+        QScrollArea,
         QSplitter,
         QSpinBox,
         QTableWidget,
@@ -170,6 +177,59 @@ def _connectivity_atlas_string(path: Path) -> str:
     return "unknown"
 
 
+class _ImagePreviewDialog(QDialog):
+    def __init__(self, image_path, title, parent=None):
+        super().__init__(parent)
+        self._image_path = Path(image_path).expanduser()
+        self._pixmap = QPixmap(str(self._image_path))
+        self.setWindowTitle(title)
+        self.resize(980, 760)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        self.info_label = QLabel(str(self._image_path))
+        root.addWidget(self.info_label)
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter if hasattr(Qt, "AlignmentFlag") else Qt.AlignCenter)
+        self.image_label.setMinimumSize(480, 320)
+
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setWidget(self.image_label)
+        root.addWidget(scroller, 1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_row.addWidget(close_button)
+        root.addLayout(close_row)
+
+        self._apply_pixmap()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_pixmap()
+
+    def _apply_pixmap(self):
+        if self._pixmap.isNull():
+            self.image_label.setText(f"Failed to load image: {self._image_path}")
+            self.image_label.setPixmap(QPixmap())
+            return
+        target_size = self.image_label.size()
+        if not target_size.isValid() or target_size.width() <= 1 or target_size.height() <= 1:
+            self.image_label.setPixmap(self._pixmap)
+            return
+        transform_mode = Qt.TransformationMode.SmoothTransformation if hasattr(Qt, "TransformationMode") else Qt.SmoothTransformation
+        aspect_mode = Qt.AspectRatioMode.KeepAspectRatio if hasattr(Qt, "AspectRatioMode") else Qt.KeepAspectRatio
+        scaled = self._pixmap.scaled(target_size, aspect_mode, transform_mode)
+        self.image_label.setPixmap(scaled)
+
+
+
 class NBSPrepareDialog(QDialog):
     """Dialog to prepare NBS covariates and select filtered row subsets."""
 
@@ -210,8 +270,14 @@ class NBSPrepareDialog(QDialog):
         self._output_dir_auto_value = ""
         self._last_result_npz_path = None
         self._last_nbs_summary = None
+        self._last_result_was_staged = False
         self._export_process = None
         self._export_output_tail = []
+        self._covariate_balance_process = None
+        self._covariate_balance_output_tail = []
+        self._last_covariate_balance_dir = None
+        self._last_covariate_balance_plot_path = None
+        self._covariate_balance_preview_dialog = None
         self._columns, self._rows = _covars_to_rows(covars_info)
         self._filtered_indices = list(range(len(self._rows)))
         self._excluded_indices = set()
@@ -417,7 +483,11 @@ class NBSPrepareDialog(QDialog):
         self.model_regressor_type_combo.addItems(self.REGRESSOR_TYPE_MODEL_OPTIONS)
         self.model_regressor_type_combo.setCurrentText("Auto")
         self.model_regressor_type_combo.currentTextChanged.connect(self._update_run_summary)
+        self.model_regressor_type_combo.currentTextChanged.connect(self._update_run_state)
         model_controls.addWidget(self.model_regressor_type_combo)
+        self.covariate_balance_button = QPushButton("Covariate Balance")
+        self.covariate_balance_button.clicked.connect(self._run_covariate_balance_analysis)
+        model_controls.addWidget(self.covariate_balance_button)
         model_controls.addStretch(1)
         layout.addLayout(model_controls)
 
@@ -834,6 +904,18 @@ class NBSPrepareDialog(QDialog):
             and self._run_process.state() != _qprocess_not_running()
         )
 
+    def _export_is_running(self):
+        return (
+            self._export_process is not None
+            and self._export_process.state() != _qprocess_not_running()
+        )
+
+    def _covariate_balance_is_running(self):
+        return (
+            self._covariate_balance_process is not None
+            and self._covariate_balance_process.state() != _qprocess_not_running()
+        )
+
     def _set_run_busy(self, busy):
         self.run_button.setEnabled(not busy)
         if hasattr(self, "save_button"):
@@ -858,6 +940,7 @@ class NBSPrepareDialog(QDialog):
             self.export_button.setEnabled(False)
         elif self._last_result_npz_path and Path(self._last_result_npz_path).is_file():
             self.export_button.setEnabled(True)
+        self._update_run_state()
 
     def _set_export_busy(self, busy):
         self.export_button.setText("Exporting..." if busy else "Export Results")
@@ -865,6 +948,7 @@ class NBSPrepareDialog(QDialog):
             self.export_button.setEnabled(False)
         elif not self._process_is_running() and self._last_result_npz_path and Path(self._last_result_npz_path).is_file():
             self.export_button.setEnabled(True)
+        self._update_run_state()
 
     @staticmethod
     def _format_nbs_summary(summary):
@@ -943,14 +1027,30 @@ class NBSPrepareDialog(QDialog):
 
     def _update_run_state(self):
         classes = self._regressor_classes()
-        can_run = len(classes) >= 2 and not self._process_is_running()
+        any_busy = (
+            self._process_is_running()
+            or self._export_is_running()
+            or self._covariate_balance_is_running()
+        )
+        can_run = len(classes) >= 2 and not any_busy
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(can_run)
         if hasattr(self, "next_button"):
             self.next_button.setEnabled(
-                (not self._process_is_running())
+                (not any_busy)
                 and (self._current_step < (len(self.STEP_TITLES) - 1))
             )
+        if hasattr(self, "covariate_balance_button"):
+            selected = self.selected_covariates()
+            regressor_type = self._selected_regressor_type()
+            can_balance = (
+                bool(selected.get("regressor"))
+                and len(selected.get("nuisance") or []) >= 1
+                and len(self.selected_row_indices()) >= 2
+                and regressor_type != "continuous"
+                and (not any_busy)
+            )
+            self.covariate_balance_button.setEnabled(can_balance)
 
     def _on_covar_toggled(self, covar_name, checked):
         _ = covar_name
@@ -1331,6 +1431,7 @@ class NBSPrepareDialog(QDialog):
         modality = self.modality_combo.currentText().strip().lower()
         if modality:
             command += ["--modality", modality]
+        command.append("--stage-no-significant")
         if engine == "matlab":
             if self.matlab_persistent_check.isChecked():
                 command.append("--matlab-persistent")
@@ -1370,6 +1471,181 @@ class NBSPrepareDialog(QDialog):
             env.insert("PYTHONPATH", os.pathsep.join(pythonpath_parts))
         return env
 
+    def _covariate_balance_root(self):
+        return Path(__file__).resolve().parents[2] / "mrsitoolbox"
+
+    def _covariate_balance_script_path(self):
+        return self._covariate_balance_root() / "scripts" / "covariate_balance_love_plot.py"
+
+    def _covariate_balance_output_dir(self, regressor_name):
+        base_dir_text = self.output_dir_edit.text().strip() if hasattr(self, "output_dir_edit") else ""
+        if base_dir_text:
+            base_dir = Path(base_dir_text).expanduser()
+        else:
+            base_dir = Path(self._default_output_dir_for_context()).expanduser()
+        return (
+            base_dir
+            / "covariate_balance"
+            / f"reg-{_slugify_fragment(regressor_name)}_n-{len(self.selected_row_indices())}"
+        )
+
+    def _build_covariate_balance_input(self):
+        selected = self.selected_covariates()
+        regressor_name = str(selected.get("regressor") or "").strip()
+        if not regressor_name:
+            raise ValueError("Select exactly one covariate as Regressor before running balance diagnostics.")
+
+        nuisance_terms = [
+            str(name).strip()
+            for name in list(selected.get("nuisance") or [])
+            if str(name).strip() and str(name).strip() != regressor_name
+        ]
+        if not nuisance_terms:
+            raise ValueError("Select at least one nuisance covariate before running balance diagnostics.")
+        if self._selected_regressor_type() == "continuous":
+            raise ValueError("Covariate balance Love plots require a categorical regressor.")
+
+        selected_indices = self.selected_row_indices()
+        if len(selected_indices) < 2:
+            raise ValueError("Select at least two rows before running balance diagnostics.")
+
+        column_order = []
+        lower_map = {str(name).strip().lower(): str(name) for name in self._columns}
+        for identity_name in ("participant_id", "session_id"):
+            resolved = lower_map.get(identity_name)
+            if resolved is not None and resolved not in column_order:
+                column_order.append(resolved)
+        if regressor_name not in column_order:
+            column_order.append(regressor_name)
+        for covariate in nuisance_terms:
+            if covariate not in column_order:
+                column_order.append(covariate)
+
+        output_dir = self._covariate_balance_output_dir(regressor_name)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        input_path = output_dir / (
+            f"{self._source_path.stem}_key-{_slugify_fragment(self._matrix_key)}"
+            f"_reg-{_slugify_fragment(regressor_name)}_n-{len(selected_indices)}_covariates.tsv"
+        )
+        with open(input_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=column_order, delimiter="\t")
+            writer.writeheader()
+            for idx in selected_indices:
+                row = self._rows[int(idx)]
+                payload = {column: _display_text(row.get(column)) for column in column_order}
+                writer.writerow(payload)
+        return input_path, output_dir, regressor_name, nuisance_terms
+
+    def _run_covariate_balance_analysis(self):
+        if self._process_is_running():
+            self._set_status("Wait for the NBS run to finish before launching covariate balance diagnostics.")
+            return
+        if self._export_is_running():
+            self._set_status("Wait for export to finish before launching covariate balance diagnostics.")
+            return
+        if self._covariate_balance_is_running():
+            self._set_status("Covariate balance diagnostics are already running.")
+            return
+
+        script_path = self._covariate_balance_script_path()
+        if not script_path.exists():
+            self._set_status(f"Covariate balance script not found: {script_path}")
+            return
+        try:
+            input_path, output_dir, regressor_name, nuisance_terms = self._build_covariate_balance_input()
+        except Exception as exc:
+            self._set_status(str(exc))
+            return
+
+        python_exe = sys.executable or "python3"
+        command = [
+            str(script_path),
+            "--input",
+            str(input_path),
+            "--regressor",
+            str(regressor_name),
+            "--covars",
+            ",".join(str(name) for name in nuisance_terms),
+            "--outdir",
+            str(output_dir),
+        ]
+        self._covariate_balance_output_tail = []
+        self._last_covariate_balance_dir = str(output_dir)
+        self._last_covariate_balance_plot_path = str(output_dir / "love_plot_smd.png")
+        self._covariate_balance_process = QProcess(self)
+        self._covariate_balance_process.readyReadStandardOutput.connect(self._on_covariate_balance_output)
+        self._covariate_balance_process.readyReadStandardError.connect(self._on_covariate_balance_output)
+        self._covariate_balance_process.finished.connect(self._on_covariate_balance_finished)
+        self._covariate_balance_process.setWorkingDirectory(str(self._covariate_balance_root()))
+        self._covariate_balance_process.setProcessEnvironment(self._build_process_environment())
+        self._append_terminal_line(f"[NBS-COVARS] Launch command: {shlex.join([python_exe] + command)}")
+        self._set_status("Launching covariate balance diagnostics...")
+        if hasattr(self, "covariate_balance_button"):
+            self.covariate_balance_button.setText("Running...")
+        self._covariate_balance_process.start(python_exe, command)
+        self._update_run_state()
+        if not self._covariate_balance_process.waitForStarted(3000):
+            self._set_status("Failed to start covariate balance diagnostics process.")
+            self._append_terminal_line(
+                "[NBS-COVARS] Failed to start covariate balance diagnostics process."
+            )
+            self._covariate_balance_process = None
+            if hasattr(self, "covariate_balance_button"):
+                self.covariate_balance_button.setText("Covariate Balance")
+            self._update_run_state()
+            return
+
+    def _on_covariate_balance_output(self):
+        if self._covariate_balance_process is None:
+            return
+        for read_fn in (
+            self._covariate_balance_process.readAllStandardOutput,
+            self._covariate_balance_process.readAllStandardError,
+        ):
+            raw = bytes(read_fn()).decode("utf-8", errors="ignore")
+            if not raw.strip():
+                continue
+            for line in raw.splitlines():
+                text = line.strip()
+                if text:
+                    self._covariate_balance_output_tail.append(text)
+                    self._append_terminal_line(f"[NBS-COVARS] {text}")
+        if self._covariate_balance_output_tail:
+            self._covariate_balance_output_tail = self._covariate_balance_output_tail[-12:]
+            self._set_status(self._covariate_balance_output_tail[-1])
+
+    def _show_covariate_balance_plot(self, plot_path):
+        plot_path = Path(plot_path).expanduser()
+        if not plot_path.is_file():
+            self._set_status(f"Covariate balance Love plot not found: {plot_path}")
+            return
+        dialog = _ImagePreviewDialog(plot_path, "Covariate Balance Love Plot", parent=self)
+        _theme, style = _workflow_dialog_stylesheet(self._theme_name)
+        dialog.setStyleSheet(style)
+        self._covariate_balance_preview_dialog = dialog
+        dialog.finished.connect(lambda *_args: setattr(self, "_covariate_balance_preview_dialog", None))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_covariate_balance_finished(self, exit_code, _exit_status):
+        plot_path = Path(str(self._last_covariate_balance_plot_path or "")).expanduser()
+        self._append_terminal_line(f"[NBS-COVARS] Process finished with exit code {exit_code}")
+        if exit_code == 0:
+            if plot_path.is_file():
+                self._set_status(f"Covariate balance Love plot written to {plot_path}")
+                self._append_terminal_line(f"[NBS-COVARS] Love plot saved to: {plot_path}")
+                self._show_covariate_balance_plot(plot_path)
+            else:
+                self._set_status("Covariate balance diagnostics completed, but no Love plot was found.")
+        else:
+            tail = self._covariate_balance_output_tail[-1] if self._covariate_balance_output_tail else "See terminal output."
+            self._set_status(f"Covariate balance diagnostics failed (exit {exit_code}). {tail}")
+        self._covariate_balance_process = None
+        if hasattr(self, "covariate_balance_button"):
+            self.covariate_balance_button.setText("Covariate Balance")
+        self._update_run_state()
+
     def _on_process_output(self):
         if self._run_process is None:
             return
@@ -1397,8 +1673,12 @@ class NBSPrepareDialog(QDialog):
                         if raw_summary:
                             try:
                                 self._last_nbs_summary = json.loads(raw_summary)
+                                self._last_result_was_staged = bool(
+                                    dict(self._last_nbs_summary or {}).get("result_staged")
+                                )
                             except Exception:
                                 self._last_nbs_summary = None
+                                self._last_result_was_staged = False
         if self._run_output_tail:
             self._run_output_tail = self._run_output_tail[-8:]
             self._set_status(self._run_output_tail[-1])
@@ -1423,15 +1703,38 @@ class NBSPrepareDialog(QDialog):
             if self._last_run_payload and self._last_run_payload.get("conn_subset_path"):
                 subset_name = Path(self._last_run_payload["conn_subset_path"]).name
                 message = f"NBS run completed successfully. Input: {subset_name}"
+            staged_empty_result = (
+                bool(self._last_result_was_staged)
+                and int(dict(self._last_nbs_summary or {}).get("n_significant", 0) or 0) == 0
+            )
             if self._last_result_npz_path and Path(self._last_result_npz_path).is_file():
-                copied_path = self._copy_result_to_output_folder(self._last_result_npz_path)
-                if copied_path:
-                    self._last_result_npz_path = copied_path
-                self.export_button.setEnabled(True)
-                message = f"{message} Ready to export results."
+                if staged_empty_result:
+                    keep_result = self._confirm_save_no_significant_result(self._last_result_npz_path)
+                    if keep_result:
+                        original_staged_path = self._last_result_npz_path
+                        copied_path = self._copy_result_to_output_folder(self._last_result_npz_path)
+                        if copied_path:
+                            self._last_result_npz_path = copied_path
+                        self._cleanup_staged_result(original_staged_path, keep_if_same=self._last_result_npz_path)
+                        self.export_button.setEnabled(True)
+                        message = f"{message} No significant components were found; staged bundle kept after confirmation. Ready to export results."
+                    else:
+                        self._cleanup_staged_result(self._last_result_npz_path)
+                        self._last_result_npz_path = None
+                        self.export_button.setEnabled(False)
+                        message = f"{message} No significant components were found; staged bundle discarded."
+                else:
+                    copied_path = self._copy_result_to_output_folder(self._last_result_npz_path)
+                    if copied_path:
+                        self._last_result_npz_path = copied_path
+                    self.export_button.setEnabled(True)
+                    message = f"{message} Ready to export results."
             else:
                 self.export_button.setEnabled(False)
-                message = f"{message} No bundled result path found in output."
+                if staged_empty_result:
+                    message = f"{message} No significant components were found and no staged bundle was available."
+                else:
+                    message = f"{message} No bundled result path found in output."
             summary_line = self._format_nbs_summary(self._last_nbs_summary)
             if summary_line:
                 message = f"{message} {summary_line}"
@@ -1538,6 +1841,7 @@ class NBSPrepareDialog(QDialog):
         self._run_cancel_requested = False
         self._last_nbs_summary = None
         self._last_result_npz_path = None
+        self._last_result_was_staged = False
         self.export_button.setEnabled(False)
         self._go_to_step(3)
         self._run_process = QProcess(self)
@@ -1570,6 +1874,50 @@ class NBSPrepareDialog(QDialog):
                 self.run_progress_label.setText("Failed to start")
             self._run_process = None
             return
+
+    def _confirm_save_no_significant_result(self, staged_result_path):
+        result_path = Path(str(staged_result_path)).expanduser()
+        summary = dict(self._last_nbs_summary or {})
+        pvalue = summary.get("global_pvalue", None)
+        pvalue_text = f"{float(pvalue):.6g}" if pvalue is not None else "NA"
+        reply = QMessageBox.question(
+            self,
+            "No Significant NBS Result",
+            (
+                "No significant NBS components were detected.\n\n"
+                f"Global p-value: {pvalue_text}\n"
+                f"Staged bundle: {result_path}\n\n"
+                "Do you want to save the staged result bundle anyway?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _cleanup_staged_result(self, result_path, keep_if_same=None):
+        try:
+            src = Path(str(result_path)).expanduser().resolve()
+        except Exception:
+            return
+        if keep_if_same is not None:
+            try:
+                if src == Path(str(keep_if_same)).expanduser().resolve():
+                    return
+            except Exception:
+                pass
+        try:
+            if src.is_file():
+                src.unlink()
+                self._append_terminal_line(f"[NBS] Deleted staged result bundle: {src}")
+        except Exception as exc:
+            self._append_terminal_line(f"[NBS] Failed to delete staged result bundle {src}: {exc}")
+            return
+        try:
+            parent = src.parent
+            if parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception:
+            pass
 
     def _copy_result_to_output_folder(self, result_path):
         try:

@@ -547,7 +547,33 @@ def _load_connectivity_archive(con_path, allow_pickle=True):
     except Exception as exc:
         raise ValueError(f"Failed to load connectivity archive: {exc}") from exc
 
+
+def _default_matrix_key_for_modality(modality):
+    modality_token = str(modality or "").strip().lower()
+    if modality_token == "dwi":
+        return "connectome_density"
+    if modality_token == "func":
+        return "connectivity"
+    return "simmatrix_sp"
+
+
+def _collapse_square_matrix_entry(matrix, key, prefix):
+    arr = np.asarray(matrix)
+    if arr.ndim == 2:
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError(f"{prefix} matrix key '{key}' has non-square shape {arr.shape}.")
+        return arr
+    if arr.ndim == 3:
+        if arr.shape[1] == arr.shape[2]:
+            return np.median(arr, axis=0)
+        if arr.shape[0] == arr.shape[1]:
+            return np.median(arr, axis=2)
+    raise ValueError(
+        f"{prefix} matrix key '{key}' must have shape (N,N), (K,N,N), or (N,N,K); got {arr.shape}."
+    )
+
 def main(con_path_list,covar_df,modality,matrix_outpath,
+         matrix_key=None,
          ignore_parc_list=[],qmask_path=None,mrsi_cov=0.67,
          comp_gradients=True,parcellation_img_path=None,
          parcel_labels_retain=[],include_parcels=False,
@@ -557,6 +583,7 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
 
     group = extract_group_from_inputs(covar_df, con_path_list)
     modality = str(modality or "").strip().lower()
+    matrix_key = str(matrix_key or "").strip() or None
     debug.title(f"Compute population Matrix for {group}")
 
     matrix_subjects_list = []
@@ -571,6 +598,7 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
     resultssubdir = split(matrix_outpath)[0]
     retained_labels = _coerce_label_list(parcel_labels_retain)
     skipped_archives = []
+    selected_matrix_key = matrix_key or _default_matrix_key_for_modality(modality)
 
     for con_path in track(con_path_list, total=len(con_path_list), description="Extracting matrix..."):
         con_path = str(con_path)
@@ -582,22 +610,31 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
         try:
             if modality == "dwi":
                 con_data = _load_connectivity_archive(con_path, allow_pickle=True)
-                matrix = np.asarray(con_data["connectome_density"])
+                if selected_matrix_key not in con_data:
+                    raise ValueError(f"{prefix} matrix key '{selected_matrix_key}' is not present.")
+                matrix = _collapse_square_matrix_entry(con_data[selected_matrix_key], selected_matrix_key, prefix)
                 profile = np.zeros((matrix.shape[0], 1, 1))
                 parcel_labels = np.asarray(con_data.get("parcel_labels"))
                 parcel_names = np.asarray(con_data.get("parcel_names"))
             elif modality == "func":
                 con_data = _load_connectivity_archive(con_path, allow_pickle=True)
-                matrix = np.asarray(con_data["connectivity"])
+                if selected_matrix_key not in con_data:
+                    raise ValueError(f"{prefix} matrix key '{selected_matrix_key}' is not present.")
+                matrix = _collapse_square_matrix_entry(con_data[selected_matrix_key], selected_matrix_key, prefix)
                 profile = con_data["timeseries"] if "timeseries" in con_data else np.zeros((matrix.shape[0], 1))
                 parcel_labels = np.asarray(con_data.get("labels_indices"))
                 parcel_names = np.asarray(con_data.get("labels"))
             else:
                 con_data = _load_connectivity_archive(con_path, allow_pickle=True)
-                matrix = np.asarray(con_data["simmatrix_sp"])
-                crlb_matrix = np.var(matrix, axis=0) * 100 if len(matrix.shape) == 3 else np.zeros_like(matrix)
-                matrix = np.median(matrix, axis=0) if len(matrix.shape) == 3 else matrix
-                matrix[crlb_matrix > 20] = 0
+                if selected_matrix_key not in con_data:
+                    raise ValueError(f"{prefix} matrix key '{selected_matrix_key}' is not present.")
+                matrix_entry = np.asarray(con_data[selected_matrix_key])
+                if selected_matrix_key == "simmatrix_sp":
+                    crlb_matrix = np.var(matrix_entry, axis=0) * 100 if len(matrix_entry.shape) == 3 else np.zeros_like(matrix_entry)
+                    matrix = np.median(matrix_entry, axis=0) if len(matrix_entry.shape) == 3 else matrix_entry
+                    matrix[crlb_matrix > 20] = 0
+                else:
+                    matrix = _collapse_square_matrix_entry(matrix_entry, selected_matrix_key, prefix)
                 parcel_concentrations = np.asarray(con_data["parcel_concentrations"])
                 profile = parcel_concentrations
                 metabolite_list = list(np.asarray(con_data["metabolites_leaveout"]).reshape(-1))
@@ -867,7 +904,8 @@ def main(con_path_list,covar_df,modality,matrix_outpath,
                     discarded_sessions       = discarded_sessions,
                     metabolites              = metabolite_list,
                     group                    = group,
-                    modality                 = modality)
+                    modality                 = modality,
+                    source_matrix_key        = np.asarray(str(selected_matrix_key)))
     save_kwargs["metab_profiles_subj_list"] = node_signals_subjects_clean
     if covar_df is not None:
         save_kwargs["covars"] = covar_df.to_records(index=False)

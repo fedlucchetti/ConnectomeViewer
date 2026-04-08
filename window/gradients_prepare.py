@@ -134,6 +134,8 @@ class GradientsPrepareDialog(QDialog):
         self._has_classification_adjacency = False
         self._precomputed_mode = False
         self._precomputed_row_indices = []
+        self._precomputed_columns_ref = None
+        self._precomputed_rows_ref = None
         self._surface_procrustes_available = False
 
         self.setWindowTitle("Gradients")
@@ -143,7 +145,7 @@ class GradientsPrepareDialog(QDialog):
         self.set_component_count(component_count)
         self.set_colormap_names(colormap_names or [], current_colormap=current_colormap)
         self.set_parcellation_path(parcellation_path)
-        self.set_hemisphere_mode("both")
+        self.set_hemisphere_mode("separate")
         self.set_surface_mesh("fsaverage4")
         self.set_surface_render_component_limit(component_count)
         self.set_surface_render_component_count(1)
@@ -154,7 +156,7 @@ class GradientsPrepareDialog(QDialog):
         self.set_classification_fit_mode("triangle")
         self.set_triangular_color_order("RBG")
         self.set_classification_surface_mesh("fsaverage4")
-        self.set_classification_hemisphere_mode("both")
+        self.set_classification_hemisphere_mode("separate")
         self.set_classification_component_options(component_count, selected_component="1")
         self.set_classification_axes("gradient2", "gradient1")
         self.set_classification_ignore_parcel_options([], [], selected_lh="", selected_rh="")
@@ -869,10 +871,32 @@ class GradientsPrepareDialog(QDialog):
         self.precomputed_summary_label.setText(str(summary_text or "No precomputed gradients bundle loaded."))
         self.precomputed_selection_label.setText(str(selection_text or "Selected pair: none"))
 
+        same_payload = rows is self._precomputed_rows_ref and columns is self._precomputed_columns_ref
+
+        if same_payload:
+            self.precomputed_table.blockSignals(True)
+            self.precomputed_table.clearSelection()
+            if selected_row is not None:
+                try:
+                    selected_row = int(selected_row)
+                except Exception:
+                    selected_row = None
+                if selected_row is not None:
+                    for table_row, source_row in enumerate(self._precomputed_row_indices):
+                        if int(source_row) == selected_row:
+                            self.precomputed_table.selectRow(table_row)
+                            break
+            elif self.precomputed_table.rowCount() == 1:
+                self.precomputed_table.selectRow(0)
+            self.precomputed_table.blockSignals(False)
+            self._refresh_action_state()
+            return
+
         row_dicts = [dict(row) for row in list(rows or [])]
         self._precomputed_row_indices = [int(row.get("__row_index__", idx)) for idx, row in enumerate(row_dicts)]
         visible_columns = [str(col) for col in list(columns or []) if str(col) != "__row_index__"]
-
+        self._precomputed_columns_ref = columns
+        self._precomputed_rows_ref = rows
         self.precomputed_table.blockSignals(True)
         self.precomputed_table.clear()
         self.precomputed_table.setColumnCount(len(visible_columns) + 1)
@@ -925,9 +949,9 @@ class GradientsPrepareDialog(QDialog):
         self._refresh_action_state()
 
     def set_hemisphere_mode(self, value: str) -> None:
-        text = str(value or "both").strip().upper()
+        text = str(value or "separate").strip().upper()
         if text not in {"BOTH", "LH", "RH", "SEPARATE"}:
-            text = "BOTH"
+            text = "SEPARATE"
         if text == "BOTH":
             display = "Both"
         elif text == "SEPARATE":
@@ -1023,10 +1047,15 @@ class GradientsPrepareDialog(QDialog):
         self.classification_surface_mesh_combo.blockSignals(False)
 
     def set_classification_hemisphere_mode(self, value: str) -> None:
-        text = str(value or "both").strip().upper()
-        if text not in {"BOTH", "LH", "RH"}:
-            text = "BOTH"
-        display = "Both" if text == "BOTH" else text
+        text = str(value or "separate").strip().upper()
+        if text not in {"BOTH", "LH", "RH", "SEPARATE"}:
+            text = "SEPARATE"
+        if text == "BOTH":
+            display = "Both"
+        elif text == "SEPARATE":
+            display = "Separate"
+        else:
+            display = text
         self.classification_hemisphere_combo.blockSignals(True)
         if self.classification_hemisphere_combo.findText(display) >= 0:
             self.classification_hemisphere_combo.setCurrentText(display)

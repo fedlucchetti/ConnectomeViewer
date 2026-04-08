@@ -8,6 +8,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 try:
     import pandas as pd
 except ImportError:
@@ -140,6 +142,97 @@ def _infer_modality_from_path(path: Path) -> str:
     return "connectivity"
 
 
+def _preferred_stack_matrix_key(modality: str) -> str | None:
+    modality_token = str(modality or "").strip().lower()
+    if modality_token == "dwi":
+        return "connectome_density"
+    if modality_token == "func":
+        return "connectivity"
+    if modality_token == "mrsi":
+        return "simmatrix_sp"
+    return None
+
+
+def _parcel_count_from_archive(archive) -> int | None:
+    for key in (
+        "parcel_labels_group",
+        "parcel_labels",
+        "labels_indices",
+        "parcel_names_group",
+        "parcel_names",
+        "labels",
+    ):
+        if key not in archive:
+            continue
+        try:
+            values = np.asarray(archive[key]).reshape(-1)
+        except Exception:
+            continue
+        if values.size > 0:
+            return int(values.size)
+    return None
+
+
+def _square_matrix_candidate_shape(shape, parcel_count: int | None) -> bool:
+    dims = tuple(int(dim) for dim in tuple(shape))
+    if len(dims) == 2:
+        return dims[0] == dims[1] and (parcel_count is None or dims[0] == int(parcel_count))
+    if len(dims) == 3:
+        if dims[1] == dims[2] and (parcel_count is None or dims[1] == int(parcel_count)):
+            return True
+        if dims[0] == dims[1] and (parcel_count is None or dims[0] == int(parcel_count)):
+            return True
+    return False
+
+
+def _candidate_matrix_keys_for_path(path: Path) -> dict[str, tuple[int, ...]]:
+    candidates = {}
+    try:
+        with np.load(str(path), allow_pickle=True) as archive:
+            parcel_count = _parcel_count_from_archive(archive)
+            for key in archive.files:
+                try:
+                    array = np.asarray(archive[key])
+                except Exception:
+                    continue
+                if not _square_matrix_candidate_shape(array.shape, parcel_count):
+                    continue
+                candidates[str(key)] = tuple(int(dim) for dim in array.shape)
+    except Exception as exc:
+        _write_diagnostic_line(f"Failed to inspect matrix candidates in {path}: {exc}")
+    return candidates
+
+
+def _shared_matrix_key_candidates(paths) -> list[dict[str, object]]:
+    selected_paths = [Path(path) for path in (paths or []) if str(path).strip()]
+    if not selected_paths:
+        return []
+
+    common_keys = None
+    shape_map = {}
+    for path in selected_paths:
+        candidates = _candidate_matrix_keys_for_path(path)
+        candidate_keys = set(candidates.keys())
+        common_keys = candidate_keys if common_keys is None else common_keys & candidate_keys
+        for key, shape in candidates.items():
+            shape_map.setdefault(key, set()).add(tuple(shape))
+
+    if not common_keys:
+        return []
+
+    items = []
+    for key in sorted(common_keys):
+        shapes = sorted(shape_map.get(key, set()))
+        items.append(
+            {
+                "key": str(key),
+                "shapes": shapes,
+                "shape_text": ", ".join("x".join(str(dim) for dim in shape) for shape in shapes),
+            }
+        )
+    return items
+
+
 def _is_enabled_flag():
     return getattr(Qt, "ItemIsEnabled", getattr(Qt.ItemFlag, "ItemIsEnabled"))
 
@@ -200,6 +293,7 @@ class BatchMatrixImportDialog(QDialog):
         self._requested_action = "add"
         self._selection_widget = None
         self._stack_prepare_widget = None
+        self._stack_matrix_key_candidates = []
         self._current_step = 0
         self._multimodal_excluded_pairs = set()
         self._multimodal_table_refreshing = False
@@ -349,6 +443,21 @@ class BatchMatrixImportDialog(QDialog):
 
         self.selection_page = QWidget()
         self.selection_tab_layout = QVBoxLayout(self.selection_page)
+        self.matrix_key_group = QGroupBox("Matrix Entry")
+        matrix_key_layout = QVBoxLayout(self.matrix_key_group)
+        matrix_key_row = QHBoxLayout()
+        matrix_key_row.addWidget(QLabel("Matrix key"))
+        self.matrix_key_combo = QComboBox()
+        self.matrix_key_combo.currentIndexChanged.connect(self._on_stack_matrix_key_changed)
+        matrix_key_row.addWidget(self.matrix_key_combo, 1)
+        matrix_key_layout.addLayout(matrix_key_row)
+        self.matrix_key_summary_label = QLabel(
+            "Square matrix entries will be detected across the selected NPZ files."
+        )
+        self.matrix_key_summary_label.setWordWrap(True)
+        matrix_key_layout.addWidget(self.matrix_key_summary_label)
+        self.matrix_key_group.setVisible(False)
+        self.selection_tab_layout.addWidget(self.matrix_key_group)
         self.selection_placeholder = QLabel(
             "Step 2 appears here after you select matrices in Step 1 and click 'Stack'."
         )
@@ -830,6 +939,79 @@ class BatchMatrixImportDialog(QDialog):
             modalities = sorted({_infer_modality_from_path(Path(path)) for path in self.selected_paths() if str(path).strip()})
         return [item for item in modalities if item]
 
+    def _selected_stack_matrix_key(self):
+        if not hasattr(self, "matrix_key_combo") or self.matrix_key_combo is None:
+            return None
+        data = self.matrix_key_combo.currentData()
+        text = self.matrix_key_combo.currentText().strip()
+        if data is not None:
+            return str(data).strip() or None
+        if text.lower().startswith("auto "):
+            return None
+        return text or None
+
+    def _refresh_stack_matrix_key_options(self):
+        if not hasattr(self, "matrix_key_combo") or self.matrix_key_combo is None:
+            return
+
+        if self._selection_widget is not None:
+            selected_paths = self.effective_selected_paths()
+        else:
+            selected_paths = self.selected_paths()
+        selected_paths = [Path(path) for path in selected_paths if str(path).strip()]
+        preferred = _preferred_stack_matrix_key(self._selected_modalities()[0] if self._selected_modalities() else "")
+        previous_key = self._selected_stack_matrix_key()
+        candidates = _shared_matrix_key_candidates(selected_paths)
+        self._stack_matrix_key_candidates = candidates
+
+        self.matrix_key_combo.blockSignals(True)
+        self.matrix_key_combo.clear()
+        self.matrix_key_combo.addItem("Auto (modality default)", None)
+        for entry in candidates:
+            label = str(entry["key"])
+            shape_text = str(entry.get("shape_text") or "").strip()
+            if shape_text:
+                label = f"{label} ({shape_text})"
+            self.matrix_key_combo.addItem(label, str(entry["key"]))
+
+        selected_index = 0
+        available_keys = [str(entry["key"]) for entry in candidates]
+        if previous_key and previous_key in available_keys:
+            selected_index = available_keys.index(previous_key) + 1
+        elif preferred and preferred in available_keys:
+            selected_index = available_keys.index(preferred) + 1
+        elif available_keys:
+            selected_index = 1
+        self.matrix_key_combo.setCurrentIndex(selected_index)
+        self.matrix_key_combo.blockSignals(False)
+
+        detected_count = len(candidates)
+        if not selected_paths:
+            self.matrix_key_summary_label.setText("No NPZ files are currently selected for stacking.")
+        elif detected_count == 0:
+            self.matrix_key_summary_label.setText(
+                "No common square matrix entries were detected across the current NPZ selection. "
+                "The stack will fall back to the modality default key."
+            )
+        else:
+            detected_text = ", ".join(
+                f"{entry['key']} ({entry['shape_text']})" if entry.get("shape_text") else str(entry["key"])
+                for entry in candidates
+            )
+            self.matrix_key_summary_label.setText(
+                f"Detected {detected_count} common square matrix entr"
+                f"{'y' if detected_count == 1 else 'ies'} across {len(selected_paths)} NPZ file(s): {detected_text}"
+            )
+        self.matrix_key_group.setVisible(self._selection_widget is not None)
+
+        if self._stack_prepare_widget is not None and hasattr(self._stack_prepare_widget, "set_matrix_key"):
+            self._stack_prepare_widget.set_matrix_key(self._selected_stack_matrix_key())
+
+    def _on_stack_matrix_key_changed(self, _index):
+        if self._stack_prepare_widget is not None and hasattr(self._stack_prepare_widget, "set_matrix_key"):
+            self._stack_prepare_widget.set_matrix_key(self._selected_stack_matrix_key())
+        self._sync_workflow_process_button()
+
     def _ordered_modalities(self):
         modalities = self._selected_modalities()
         reference = self.reference_modality_combo.currentText().strip()
@@ -1097,6 +1279,7 @@ class BatchMatrixImportDialog(QDialog):
             self.reference_modality_combo.setCurrentText(current_reference)
         self.reference_modality_combo.blockSignals(False)
         ready = self._stack_prepare_widget is not None and self._selection_widget is not None
+        self._refresh_stack_matrix_key_options()
         for idx in (1, 2, 3, 4):
             self._step_buttons[idx].setEnabled(ready)
         self._update_multimodal_controls()
@@ -1343,6 +1526,7 @@ class BatchMatrixImportDialog(QDialog):
             self.selection_tab_layout.addWidget(self._selection_widget, 1)
         else:
             self._selection_widget.set_selected_paths(selected)
+        self._refresh_stack_matrix_key_options()
 
         if self._stack_prepare_widget is None:
             if hasattr(self, "workflow_terminal") and self.workflow_terminal is not None:
@@ -1385,6 +1569,8 @@ class BatchMatrixImportDialog(QDialog):
         else:
             self._stack_prepare_widget.set_selected_paths(selected)
             self._stack_prepare_widget.show()
+        if hasattr(self._stack_prepare_widget, "set_matrix_key"):
+            self._stack_prepare_widget.set_matrix_key(self._selected_stack_matrix_key())
         if hasattr(self._stack_prepare_widget, "refresh_process_state"):
             self._stack_prepare_widget.refresh_process_state()
         self._refresh_optional_steps()

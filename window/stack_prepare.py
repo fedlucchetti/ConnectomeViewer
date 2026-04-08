@@ -1056,14 +1056,7 @@ class StackPrepareDialog(QWidget):
         self._default_bids_dir = str(default_bids_dir or "").strip()
         self._default_atlas_dir = str(default_atlas_dir or "").strip()
         self._covars_widget = None
-        self._covars_df = None
-        self._covars_path = None
-        self._covars_error = ""
-        self._columns = []
-        self._rows = []
-        self._filtered_indices = []
-        self._excluded_indices = set()
-        self._table_refreshing = False
+        self._matrix_key = None
         self._output_path_auto = True
         self._processing = False
         self._worker_thread = None
@@ -1293,7 +1286,21 @@ class StackPrepareDialog(QWidget):
             + (f"\nAtlas: {self._detected_atlas}" if self._selected_paths else "")
             + (f"\nPrimary modality: {self._detected_modality}" if self._selected_paths else "")
             + (f"\nDetected modalities: {modalities}" if self._selected_paths else "")
+            + (
+                f"\nMatrix key: {self._matrix_key}"
+                if self._selected_paths and self._matrix_key
+                else ("\nMatrix key: Auto (modality default)" if self._selected_paths else "")
+            )
         )
+
+    def set_matrix_key(self, matrix_key):
+        normalized = str(matrix_key or "").strip() or None
+        if normalized == self._matrix_key:
+            return
+        self._matrix_key = normalized
+        self._refresh_selection_summary()
+        self._update_process_enabled()
+        self.configuration_changed.emit()
 
     def _handle_close_requested(self):
         _stack_diagnostic_log(
@@ -1465,12 +1472,7 @@ class StackPrepareDialog(QWidget):
                 return str(suffix[0] or "all"), str(suffix[1] or "all")
         if self._covars_widget is not None:
             return self._covars_widget.current_selection_suffix()
-        covar = self.filter_covar_combo.currentText().strip()
-        values = self._parse_filter_values(self.filter_value_edit.text())
-        if not covar or not values:
-            return "all", "all"
-        joined = "-".join(values)
-        return _slugify(covar), _slugify(joined)
+        return "all", "all"
 
     def _current_multimodal_config(self):
         if not callable(self._multimodal_config_provider):
@@ -1492,10 +1494,6 @@ class StackPrepareDialog(QWidget):
             "enabled": True,
             "ordered_modalities": ordered_modalities,
         }
-
-    def _on_filter_inputs_changed(self, *_args):
-        if self._output_path_auto:
-            self._set_default_output_path(force=True)
 
     def _resolved_stack_output_path(self) -> Path | None:
         if not self._selected_paths:
@@ -1545,271 +1543,6 @@ class StackPrepareDialog(QWidget):
         )
         self._update_process_enabled()
 
-    def _browse_covars_file(self):
-        if self._covars_widget is not None:
-            self._covars_widget._browse_covars_file()
-            return
-        start_dir = str(self._selected_paths[0].parent) if self._selected_paths else (
-            self._default_bids_dir or str(Path.home())
-        )
-        selected, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select covariates TSV",
-            start_dir,
-            "TSV files (*.tsv);;All files (*)",
-        )
-        if selected:
-            self._load_covars_file(Path(selected))
-
-    def _clear_covars_file(self):
-        if self._covars_widget is not None:
-            self._covars_widget._clear_covars_file()
-            return
-        if not hasattr(self, "covars_path_label"):
-            return
-        self._covars_df = None
-        self._covars_path = None
-        self._covars_error = ""
-        self._columns = []
-        self._rows = []
-        self._filtered_indices = []
-        self._excluded_indices = set()
-        self.covars_path_label.setText("No covars file loaded.")
-        self.tsv_drop_label.setText("Drop a .tsv file here or use Browse.")
-        self.filter_covar_combo.clear()
-        self.table.clear()
-        self.table.setRowCount(0)
-        self.table.setColumnCount(0)
-        self.showing_rows_label.setText("No covars filter applied.")
-        self._set_status("Covars file cleared. All selected NPZ files will be used.")
-        self._update_process_enabled()
-        self.configuration_changed.emit()
-
-    def _load_covars_file(self, path: Path):
-        if self._covars_widget is not None:
-            self._covars_widget._load_covars_file(path)
-            return
-        if not hasattr(self, "filter_covar_combo"):
-            return
-        _ensure_pandas()
-        if path.suffix.lower() != ".tsv":
-            QMessageBox.warning(self, "Invalid Covars File", "Select a .tsv covariates file.")
-            return
-        df = pd.read_csv(path, sep="\t")
-        self._covars_df = df
-        self._covars_path = Path(path)
-        self._columns, self._rows = _covars_to_rows(df)
-        self._filtered_indices = list(range(len(self._rows)))
-        self._excluded_indices = set()
-        self._covars_error = ""
-        sub_col = None
-        ses_col = None
-        if df is not None:
-            col_map = {str(col).lower(): col for col in df.columns}
-            sub_col = (
-                col_map.get("participant_id")
-                or col_map.get("subject_id")
-                or col_map.get("subject")
-                or col_map.get("sub")
-                or col_map.get("id")
-            )
-            ses_col = col_map.get("session_id") or col_map.get("session") or col_map.get("ses")
-        if not sub_col or not ses_col:
-            self._covars_error = (
-                "Covars file is missing participant_id/subject_id and/or session_id/session columns."
-            )
-        self.filter_covar_combo.clear()
-        self.filter_covar_combo.addItems(self._columns)
-        self._refresh_table()
-        self.covars_path_label.setText(f"Loaded covars: {path}")
-        if self._covars_error:
-            self._set_status(self._covars_error)
-        else:
-            self._set_status(
-                f"Loaded covars TSV with {len(self._rows)} rows. Filter rows before processing if needed."
-            )
-        self._update_process_enabled()
-        self.configuration_changed.emit()
-
-    def dragEnterEvent(self, event):
-        if self._covars_widget is not None:
-            event.ignore()
-            return
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                if url.isLocalFile() and url.toLocalFile().lower().endswith(".tsv"):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def dropEvent(self, event):
-        if self._covars_widget is not None:
-            event.ignore()
-            return
-        if not event.mimeData().hasUrls():
-            event.ignore()
-            return
-        for url in event.mimeData().urls():
-            if url.isLocalFile() and url.toLocalFile().lower().endswith(".tsv"):
-                self._load_covars_file(Path(url.toLocalFile()))
-                event.acceptProposedAction()
-                return
-        event.ignore()
-
-    @staticmethod
-    def _parse_filter_values(text):
-        values = [token.strip() for token in str(text).split(",")]
-        return [token for token in values if token != ""]
-
-    @classmethod
-    def _parse_numeric_filter_targets(cls, tokens):
-        exact_targets = []
-        range_targets = []
-        for token in tokens:
-            text = str(token).strip()
-            if text == "":
-                continue
-            range_match = NUMERIC_RANGE_RE.match(text)
-            if range_match:
-                start = float(range_match.group(1))
-                stop = float(range_match.group(2))
-                low, high = (start, stop) if start <= stop else (stop, start)
-                range_targets.append((low, high))
-                continue
-            exact_targets.append(float(text))
-        return exact_targets, range_targets
-
-    @staticmethod
-    def _matches_numeric(value, exact_targets, range_targets):
-        try:
-            val = float(_display_text(value).strip())
-        except Exception:
-            return False
-        if any(np.isclose(val, target) for target in exact_targets):
-            return True
-        for low, high in range_targets:
-            if (val > low or np.isclose(val, low)) and (val < high or np.isclose(val, high)):
-                return True
-        return False
-
-    @staticmethod
-    def _matches_any(source_value, targets):
-        text = _display_text(source_value).strip()
-        if text == "":
-            return False
-        return text in targets
-
-    def _apply_filter(self):
-        if not self._columns:
-            self._set_status("No covariates available to filter.")
-            return
-        covar_name = self.filter_covar_combo.currentText().strip()
-        target_text = self.filter_value_edit.text().strip()
-        if not covar_name:
-            self._set_status("Select a covariate to filter.")
-            return
-        if target_text == "":
-            self._set_status("Enter a covariate value to filter.")
-            return
-        target_values = self._parse_filter_values(target_text)
-        if not target_values:
-            self._set_status("Enter at least one filter value.")
-            return
-
-        values = [row.get(covar_name) for row in self._rows]
-        numeric = _column_is_numeric(values)
-        matched = []
-        if numeric:
-            try:
-                exact_targets, range_targets = self._parse_numeric_filter_targets(target_values)
-            except Exception:
-                self._set_status("Numeric filters support values like 0,1 or ranges like 32-46.")
-                return
-            for row_idx, value in enumerate(values):
-                if self._matches_numeric(value, exact_targets, range_targets):
-                    matched.append(row_idx)
-        else:
-            for row_idx, value in enumerate(values):
-                if self._matches_any(value, target_values):
-                    matched.append(row_idx)
-        self._filtered_indices = matched
-        self._refresh_table()
-        self._set_status(
-            f"Filter applied: {covar_name} in [{', '.join(target_values)}]. "
-            f"Showing {len(self._filtered_indices)}/{len(self._rows)} rows."
-        )
-        self._update_process_enabled()
-        self.configuration_changed.emit()
-
-    def _reset_filter(self):
-        self._filtered_indices = list(range(len(self._rows)))
-        self._refresh_table()
-        self._set_status(f"Filter reset. Showing {len(self._filtered_indices)} rows.")
-        self._update_process_enabled()
-        self.configuration_changed.emit()
-
-    def _refresh_table(self):
-        self._table_refreshing = True
-        self.table.blockSignals(True)
-        self.table.setColumnCount(len(self._columns) + 1)
-        self.table.setHorizontalHeaderLabels(["Exclude"] + list(self._columns))
-        self.table.setRowCount(len(self._filtered_indices))
-        enabled_flag = _is_enabled_flag()
-        selectable_flag = _is_selectable_flag()
-        checkable_flag = _is_user_checkable_flag()
-        editable_flag = _is_editable_flag()
-        for table_row, source_idx in enumerate(self._filtered_indices):
-            row_data = self._rows[source_idx]
-            include_item = QTableWidgetItem("")
-            include_item.setFlags(enabled_flag | selectable_flag | checkable_flag)
-            include_item.setCheckState(
-                Qt.Checked if source_idx in self._excluded_indices else Qt.Unchecked
-            )
-            self.table.setItem(table_row, 0, include_item)
-            for col_idx, covar_name in enumerate(self._columns, start=1):
-                item = QTableWidgetItem(_display_text(row_data.get(covar_name)))
-                item.setFlags(item.flags() & ~editable_flag)
-                self.table.setItem(table_row, col_idx, item)
-        if self.table.columnCount() > 0:
-            header = self.table.horizontalHeader()
-            if QT_LIB == 6:
-                header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-                for col_idx in range(1, self.table.columnCount()):
-                    header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Stretch)
-            else:
-                header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-                for col_idx in range(1, self.table.columnCount()):
-                    header.setSectionResizeMode(col_idx, QHeaderView.Stretch)
-        self.table.blockSignals(False)
-        self._table_refreshing = False
-        self._update_showing_rows_label()
-
-    def _on_table_item_changed(self, item):
-        if item is None or self._table_refreshing:
-            return
-        if item.column() != 0:
-            return
-        row = item.row()
-        if row < 0 or row >= len(self._filtered_indices):
-            return
-        source_idx = self._filtered_indices[row]
-        if item.checkState() == Qt.Checked:
-            self._excluded_indices.add(source_idx)
-        else:
-            self._excluded_indices.discard(source_idx)
-        self._update_showing_rows_label()
-        self._update_process_enabled()
-        self.configuration_changed.emit()
-
-    def _update_showing_rows_label(self):
-        self.showing_rows_label.setText(
-            f"Showing {len(self._filtered_indices)}/{len(self._rows)} rows | "
-            f"Included: {len(self.selected_row_indices())}"
-        )
-
-    def selected_row_indices(self):
-        return [idx for idx in self._filtered_indices if idx not in self._excluded_indices]
-
     def _selected_covars_df(self):
         if callable(self._covars_df_provider):
             try:
@@ -1821,12 +1554,7 @@ class StackPrepareDialog(QWidget):
             return covars.copy() if hasattr(covars, "copy") else covars
         if self._covars_widget is not None:
             return self._covars_widget.selected_covars_df()
-        if self._covars_df is None:
-            return None
-        selected = self.selected_row_indices()
-        if not selected:
-            return self._covars_df.iloc[0:0].copy()
-        return self._covars_df.iloc[selected].reset_index(drop=True)
+        return None
 
     def _prepare_child_widgets_for_close(self):
         _stack_diagnostic_log("_prepare_child_widgets_for_close called")
@@ -1844,11 +1572,7 @@ class StackPrepareDialog(QWidget):
         effective_paths = self.effective_selected_paths()
         required_ok = bool(self.output_path_edit.text().strip()) and bool(effective_paths)
         covars_df = self._selected_covars_df()
-        covars_error = ""
-        if self._covars_widget is not None:
-            covars_error = self._covars_widget.covars_error()
-        elif self._covars_df is not None:
-            covars_error = self._covars_error
+        covars_error = self._covars_widget.covars_error() if self._covars_widget is not None else ""
         covars_ok = not covars_error
         if covars_df is not None:
             covars_ok = covars_ok and len(covars_df) > 0
@@ -1956,6 +1680,7 @@ class StackPrepareDialog(QWidget):
             "con_path_list": [str(path) for path in effective_paths],
             "covar_df": covars_df,
             "modality": self._detected_modality,
+            "matrix_key": self._matrix_key,
             "ignore_parc_list": self._parse_ignore_parcels(),
             "qmask_path": self.qmask_path_edit.text().strip() or None,
             "mrsi_cov": float(self.mrsi_cov_spin.value()),

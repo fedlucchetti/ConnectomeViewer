@@ -1522,12 +1522,12 @@ class ConnectomeViewer(QMainWindow):
         self._gradient_precomputed_selected_row = None
         self._gradient_use_precomputed_bundle = False
         self._gradient_component_count = 4
-        self._gradient_hemisphere_mode = "both"
+        self._gradient_hemisphere_mode = "separate"
         self._gradient_surface_mesh = "fsaverage4"
         self._gradient_surface_render_count = 1
         self._gradient_surface_procrustes = False
         self._gradient_classification_surface_mesh = self._gradient_surface_mesh
-        self._gradient_classification_hemisphere_mode = "both"
+        self._gradient_classification_hemisphere_mode = "separate"
         self._gradient_scatter_rotation = "Default"
         self._gradient_scatter_triangular_rgb = False
         self._gradient_classification_fit_mode = "triangle"

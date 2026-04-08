@@ -5,6 +5,7 @@ import sys
 import time
 import uuid
 import hashlib
+import tempfile
 from os.path import join, isdir, isfile, dirname, abspath
 from pathlib import Path
 import argparse
@@ -980,6 +981,14 @@ parser.add_argument('--parcellation-path', type=str, default=None,
 parser.add_argument('--modality', type=str, default=None,
                     choices=["fmri", "mrsi", "dwi", "anat", "morph", "pet", "other"],
                     help="Optional modality override used for results output path.")
+parser.add_argument(
+    '--stage-no-significant',
+    action='store_true',
+    help=(
+        "If no significant NBS component is found, write the bundled result to a temporary staged "
+        "NPZ instead of saving it directly into the normal output tree."
+    ),
+)
 
 
 args = parser.parse_args()
@@ -1641,15 +1650,17 @@ if n_sig_comp:
     for i in ids_sig:
         debug.info(f"Component {i}: pvalue = {pvalue_arr[i]}")
 else:
-    debug.warning("No significant components detected; exporting component data anyway.")
+    debug.warning("No significant components detected.")
     for i, val in enumerate(pvalue_arr):
         debug.info(f"Component {i}: pvalue = {val}")
 debug.info(f"Global p-value (min component p): {global_pvalue if np.isfinite(global_pvalue) else 'NA'}")
+stage_no_significant = bool(args.stage_no_significant and n_sig_comp == 0)
 summary_payload = {
     "n_significant": int(n_sig_comp),
     "significant_indices": [int(i) for i in ids_sig.tolist()],
     "significant_pvalues": [float(pvalue_arr[i]) for i in ids_sig.tolist()],
     "global_pvalue": (float(global_pvalue) if np.isfinite(global_pvalue) else None),
+    "result_staged": bool(stage_no_significant),
 }
 print(f"[NBS_SUMMARY]{json.dumps(summary_payload, separators=(',', ':'))}", flush=True)
 
@@ -1662,7 +1673,12 @@ if regressor_values_out_all is None and expanded_info:
         idx = np.argmax(mat, axis=1)
         regressor_values_out_all = np.asarray([levels[i] for i in idx], dtype=float)
 
-components_all_path = join(plot_dir, f"{param_tag}_components_all.npz")
+components_all_name = f"{param_tag}_components_all.npz"
+if stage_no_significant:
+    stage_dir = tempfile.mkdtemp(prefix="nbs_no_sig_")
+    components_all_path = join(stage_dir, components_all_name)
+else:
+    components_all_path = join(plot_dir, components_all_name)
 covars_records = participants_df.to_records(index=False) if participants_df is not None else np.array([])
 comp_masks_all = np.asarray(results_dict["comp_masks"], dtype=np.uint8)
 comp_edges_all = np.array(results_dict.get("comp_edges", []), dtype=object)
@@ -1698,120 +1714,124 @@ np.savez(
     covars=covars_records,
     comp_edges=comp_edges_all,
 )
-debug.success("Bundled component results saved to", components_all_path)
+if stage_no_significant:
+    debug.info("No significant components detected; staged bundled component results at", components_all_path)
+else:
+    debug.success("Bundled component results saved to", components_all_path)
 print(f"[NBS_RESULT]{components_all_path}", flush=True)
 
-summary_rows: list[dict[str, object]] = []
-total_components = len(pvalue_arr)
-for comp_idx in range(total_components):
-    comp_tag = f"{param_tag}_comp-{comp_idx}"
-    summary_rows.append({
-        "component_idx": comp_idx,
-        "pvalue": float(pvalue_arr[comp_idx]),
-        "significant": bool(comp_idx in ids_sig),
-        "permtest": args.permtest,
-        "nperm": args.nperm,
-        "t_thresh": args.t_thresh,
-        "npert": npert,
-        "preproc": args.preproc,
-        "test_type": test_type_tag,
-        "test_size": size_tag,
-        "test_tail": tail_tag,
-        "connectivity_path": connectivity_path,
-        "regressor_name": regressor_name,
-        "npz_path": "",
-        "plot_path": "",
-        "nodes_path": "",
-        "meta_path": "",
-    })
+if not stage_no_significant:
+    summary_rows: list[dict[str, object]] = []
+    total_components = len(pvalue_arr)
+    for comp_idx in range(total_components):
+        comp_tag = f"{param_tag}_comp-{comp_idx}"
+        summary_rows.append({
+            "component_idx": comp_idx,
+            "pvalue": float(pvalue_arr[comp_idx]),
+            "significant": bool(comp_idx in ids_sig),
+            "permtest": args.permtest,
+            "nperm": args.nperm,
+            "t_thresh": args.t_thresh,
+            "npert": npert,
+            "preproc": args.preproc,
+            "test_type": test_type_tag,
+            "test_size": size_tag,
+            "test_tail": tail_tag,
+            "connectivity_path": connectivity_path,
+            "regressor_name": regressor_name,
+            "npz_path": "",
+            "plot_path": "",
+            "nodes_path": "",
+            "meta_path": "",
+        })
 
-for comp_idx in range(total_components):
-    is_sig = comp_idx in ids_sig
-    comp_tag = f"{param_tag}_comp-{comp_idx}"
-    plot_path = join(plot_dir, f"{comp_tag}_connectome.png")
-    list_path = join(plot_dir, f"{comp_tag}_nodes.tsv")
-    meta_path = join(plot_dir, f"{comp_tag}_summary.tsv")
-    npz_path = join(plot_dir, f"{comp_tag}_results.npz")
-    raw_mask = np.asarray(results_dict["comp_masks"][comp_idx], dtype=bool)
-    nbs_network_arr = raw_mask if is_sig else np.zeros_like(raw_mask, dtype=bool)
-    comp_nodes = np.where(nbs_network_arr.sum(axis=0) > 0)[0]
-    component_labels = parcel_labels[comp_nodes]
-    component_names = [str(parcel_names[i]) for i in comp_nodes]
-    component_coords = centroids_world[comp_nodes]
-    comp_results = {
-        "comp_masks": [nbs_network_arr],
-        "comp_pvals": [results_dict["comp_pvals"][comp_idx]],
-        "t_mat": results_dict["t_mat"],
-    }
-    regressor_values_out = regressor_values_raw
-    if regressor_values_out is None and expanded_info:
-        level_cols = expanded_info.get("columns") or []
-        levels = expanded_info.get("levels") or []
-        if level_cols and levels and all(col in designmat_dict for col in level_cols):
-            mat = np.column_stack([designmat_dict[col] for col in level_cols])
-            idx = np.argmax(mat, axis=1)
-            regressor_values_out = np.asarray([levels[i] for i in idx], dtype=float)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        f.write("component_idx\tpvalue\tpermtest\tnperm\tt_thresh\tsignificant\n")
-        f.write(f"{comp_idx}\t{results_dict['comp_pvals'][comp_idx]:.6f}\t"
-                f"{args.permtest}\t{args.nperm}\t{args.t_thresh}\t{int(is_sig)}\n")
-    with open(list_path, "w", encoding="utf-8") as f:
-        f.write("label\tname\tx\ty\tz\n")
-        for lbl, name, coord in zip(component_labels, component_names, component_coords):
-            f.write(f"{int(lbl)}\t{name}\t{coord[0]:.3f}\t{coord[1]:.3f}\t{coord[2]:.3f}\n")
-    covars_records = participants_df.to_records(index=False) if participants_df is not None else np.array([])
-    np.savez(
-        npz_path,
-        component_idx=np.array(comp_idx, dtype=int),
-        comp_mask=nbs_network_arr.astype(np.uint8),
-        t_matrix=results_dict["t_mat"],
-        pvalue=np.array(results_dict["comp_pvals"][comp_idx], dtype=float),
-        significant=np.array(int(is_sig), dtype=int),
-        permtest=args.permtest,
-        nperm=np.array(args.nperm, dtype=int),
-        t_thresh=np.array(args.t_thresh, dtype=float),
-        npert=np.array(npert, dtype=int),
-        preproc=args.preproc,
-        test_type=test_type_tag,
-        test_size=size_tag,
-        test_tail=tail_tag,
-        connectivity_path=connectivity_path,
-        subject_ids=subject_id_all.astype(str),
-        session_ids=session_all.astype(str),
-        regressor_name=regressor_name,
-        regressor_values=regressor_values_out if regressor_values_out is not None else np.array([]),
-        group=group,
-        parc_scheme=parc_scheme,
-        scale=np.array(scale, dtype=int),
-        diag=diag,
-        lobes=lobes_choice,
-        param_tag=param_tag,
-        parcel_labels=parcel_labels,
-        parcel_names=parcel_names,
-        centroids_world=centroids_world,
-        covars=covars_records,
-    )
-    summary_rows[comp_idx].update({
-        "npz_path": npz_path,
-        "plot_path": plot_path if is_sig else "",
-        "nodes_path": list_path,
-        "meta_path": meta_path,
-        "connectivity_path": connectivity_path,
-    })
-    if is_sig:
-        brain3d.plot_significant_connectome(
-            comp_results,
-            parcel_df,
-            plot_path,
-            alpha=0.8,
-            node_size=6,
-            node_color="cyan",
-            edge_cmap="PiYG",
-            black_bg=True,
+    for comp_idx in range(total_components):
+        is_sig = comp_idx in ids_sig
+        comp_tag = f"{param_tag}_comp-{comp_idx}"
+        plot_path = join(plot_dir, f"{comp_tag}_connectome.png")
+        list_path = join(plot_dir, f"{comp_tag}_nodes.tsv")
+        meta_path = join(plot_dir, f"{comp_tag}_summary.tsv")
+        npz_path = join(plot_dir, f"{comp_tag}_results.npz")
+        raw_mask = np.asarray(results_dict["comp_masks"][comp_idx], dtype=bool)
+        nbs_network_arr = raw_mask if is_sig else np.zeros_like(raw_mask, dtype=bool)
+        comp_nodes = np.where(nbs_network_arr.sum(axis=0) > 0)[0]
+        component_labels = parcel_labels[comp_nodes]
+        component_names = [str(parcel_names[i]) for i in comp_nodes]
+        component_coords = centroids_world[comp_nodes]
+        comp_results = {
+            "comp_masks": [nbs_network_arr],
+            "comp_pvals": [results_dict["comp_pvals"][comp_idx]],
+            "t_mat": results_dict["t_mat"],
+        }
+        regressor_values_out = regressor_values_raw
+        if regressor_values_out is None and expanded_info:
+            level_cols = expanded_info.get("columns") or []
+            levels = expanded_info.get("levels") or []
+            if level_cols and levels and all(col in designmat_dict for col in level_cols):
+                mat = np.column_stack([designmat_dict[col] for col in level_cols])
+                idx = np.argmax(mat, axis=1)
+                regressor_values_out = np.asarray([levels[i] for i in idx], dtype=float)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            f.write("component_idx\tpvalue\tpermtest\tnperm\tt_thresh\tsignificant\n")
+            f.write(f"{comp_idx}\t{results_dict['comp_pvals'][comp_idx]:.6f}\t"
+                    f"{args.permtest}\t{args.nperm}\t{args.t_thresh}\t{int(is_sig)}\n")
+        with open(list_path, "w", encoding="utf-8") as f:
+            f.write("label\tname\tx\ty\tz\n")
+            for lbl, name, coord in zip(component_labels, component_names, component_coords):
+                f.write(f"{int(lbl)}\t{name}\t{coord[0]:.3f}\t{coord[1]:.3f}\t{coord[2]:.3f}\n")
+        covars_records = participants_df.to_records(index=False) if participants_df is not None else np.array([])
+        np.savez(
+            npz_path,
+            component_idx=np.array(comp_idx, dtype=int),
+            comp_mask=nbs_network_arr.astype(np.uint8),
+            t_matrix=results_dict["t_mat"],
+            pvalue=np.array(results_dict["comp_pvals"][comp_idx], dtype=float),
+            significant=np.array(int(is_sig), dtype=int),
+            permtest=args.permtest,
+            nperm=np.array(args.nperm, dtype=int),
+            t_thresh=np.array(args.t_thresh, dtype=float),
+            npert=np.array(npert, dtype=int),
+            preproc=args.preproc,
+            test_type=test_type_tag,
+            test_size=size_tag,
+            test_tail=tail_tag,
+            connectivity_path=connectivity_path,
+            subject_ids=subject_id_all.astype(str),
+            session_ids=session_all.astype(str),
+            regressor_name=regressor_name,
+            regressor_values=regressor_values_out if regressor_values_out is not None else np.array([]),
+            group=group,
+            parc_scheme=parc_scheme,
+            scale=np.array(scale, dtype=int),
+            diag=diag,
+            lobes=lobes_choice,
+            param_tag=param_tag,
+            parcel_labels=parcel_labels,
+            parcel_names=parcel_names,
+            centroids_world=centroids_world,
+            covars=covars_records,
         )
-        debug.success(f"Saved component {comp_idx} outputs to {plot_dir}")
-if summary_rows:
-    summary_df = pd.DataFrame(summary_rows)
-    summary_csv = join(plot_dir, f"{param_tag}_components_summary.csv")
-    summary_df.to_csv(summary_csv, index=False)
-    debug.success("Component summary CSV saved to", summary_csv)
+        summary_rows[comp_idx].update({
+            "npz_path": npz_path,
+            "plot_path": plot_path if is_sig else "",
+            "nodes_path": list_path,
+            "meta_path": meta_path,
+            "connectivity_path": connectivity_path,
+        })
+        if is_sig:
+            brain3d.plot_significant_connectome(
+                comp_results,
+                parcel_df,
+                plot_path,
+                alpha=0.8,
+                node_size=6,
+                node_color="cyan",
+                edge_cmap="PiYG",
+                black_bg=True,
+            )
+            debug.success(f"Saved component {comp_idx} outputs to {plot_dir}")
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        summary_csv = join(plot_dir, f"{param_tag}_components_summary.csv")
+        summary_df.to_csv(summary_csv, index=False)
+        debug.success("Component summary CSV saved to", summary_csv)

@@ -174,9 +174,14 @@ class GradientDialogControllerTests(unittest.TestCase):
         self.assertIn("show_proximity_circles", keywords)
         self.assertIn("initial_proximity_slider_value", keywords)
         self.assertIn("use_line_proximity_energy", keywords)
-        self.assertIs(keywords["show_proximity_circles"].value, True)
+        self.assertIn("path_metric_coords", keywords)
+        self.assertIs(keywords["show_proximity_circles"].value, False)
         self.assertEqual(keywords["initial_proximity_slider_value"].value, 1000)
         self.assertIs(keywords["use_line_proximity_energy"].value, False)
+
+    def test_sync_gradients_dialog_state_reuses_precomputed_dialog_rows(self):
+        source = textwrap.dedent(inspect.getsource(GradientDialogController._sync_gradients_dialog_state))
+        self.assertIn("dialog_covars_rows", source)
 
 
 if __name__ == "__main__":

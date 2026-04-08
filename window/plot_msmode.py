@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Nilearn surface rendering dialogs for gradient volume maps.
-
-This module is designed for GUI integration (e.g., connectome_viewer).
-It renders each component on one row with four views:
-left-lateral, left-medial, right-medial, right-lateral,
-and a per-component colorbar on the right.
-"""
+"""Gradient scatter and classification dialogs."""
 
 import heapq
 import importlib.util
@@ -17,7 +11,6 @@ from warnings import warn
 
 import nibabel as nib
 import numpy as np
-from matplotlib.cm import ScalarMappable
 from matplotlib.collections import LineCollection
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
@@ -30,7 +23,7 @@ except Exception:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-from nilearn import datasets, plotting, surface
+from nilearn import surface
 
 try:
     from PyQt6.QtCore import Qt
@@ -66,323 +59,16 @@ try:
 except Exception:
     from mrsi_viewer.window.shared.theme import dialog_theme_stylesheet as _shared_dialog_theme_stylesheet
 
+try:
+    from .gradient_free_energy import GradientFreeEnergyDialog
+    from .gradient_surface import GradientSurfaceDialog
+except Exception:
+    from gradient_free_energy import GradientFreeEnergyDialog
+    from gradient_surface import GradientSurfaceDialog
+
 
 def _dialog_theme_stylesheet(theme_name="Dark"):
     return _shared_dialog_theme_stylesheet(theme_name)
-
-
-class GradientSurfaceDialog(QDialog):
-    """Interactive Nilearn surface viewer for 3D/4D gradient maps."""
-    _surface_assets_cache = None
-
-    def __init__(
-        self,
-        volume_img,
-        title="Gradient Components",
-        parent=None,
-        cmap=None,
-        cmap_name="spectrum_fsl",
-        theme_name="Dark",
-        hemisphere_mode="both",
-        fsaverage_mesh="fsaverage4",
-    ):
-        super().__init__(parent)
-        self._img = nib.as_closest_canonical(volume_img)
-        self._data = np.asarray(self._img.get_fdata(), dtype=float)
-        if self._data.ndim == 3:
-            self._data = self._data[..., np.newaxis]
-        if self._data.ndim != 4:
-            raise ValueError(f"Expected 3D or 4D volume data. Got shape {self._data.shape}.")
-
-        self._n_components = self._data.shape[3]
-        self._title = title
-        self._cmap_name = str(cmap_name or "spectrum_fsl")
-        self._cmap = cmap if cmap is not None else self._default_cmap(self._cmap_name)
-        self._theme_name = "Dark"
-        self._hemisphere_mode = self._normalize_hemisphere_mode(hemisphere_mode)
-        self._fsaverage_mesh = self._normalize_fsaverage_mesh(fsaverage_mesh)
-        self.setWindowTitle(title)
-
-        self.figure = Figure(
-            figsize=(20, max(3.2 * self._n_components, 4.0)),
-            constrained_layout=True,
-        )
-        self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-
-        self.info_label = QLabel(
-            "Views per component: "
-            + self._hemisphere_label_text()
-            + f" | Mesh: {self._fsaverage_mesh}"
-            + f" | Cmap: {self._cmap_name}"
-        )
-        self.save_button = QPushButton("Save Figure")
-        self.save_button.clicked.connect(self._save_figure)
-
-        controls = QHBoxLayout()
-        controls.addWidget(self.info_label, 1)
-        controls.addWidget(self.save_button, 0)
-
-        layout = QVBoxLayout(self)
-        layout.addLayout(controls)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self.canvas, 1)
-        self.set_theme(theme_name)
-
-        self._render()
-
-    def set_theme(self, theme_name="Dark"):
-        theme, style = _dialog_theme_stylesheet(theme_name)
-        self._theme_name = theme
-        self.setStyleSheet(style)
-
-    @staticmethod
-    def _default_cmap(cmap_name):
-        try:
-            try:
-                from graphplot.colorbar import ColorBar
-            except Exception:
-                from mrsitoolbox.graphplot.colorbar import ColorBar
-
-            colorbar = ColorBar()
-            if cmap_name == "spectrum_fsl":
-                try:
-                    return colorbar.load_fsl_cmap(cmap_name)
-                except Exception:
-                    return colorbar.bars(cmap_name)
-            try:
-                return colorbar.load_fsl_cmap(cmap_name)
-            except Exception:
-                return colorbar.bars(cmap_name)
-        except Exception:
-            return "viridis"
-
-    @classmethod
-    def from_array(
-        cls,
-        volume_data,
-        affine=None,
-        title="Gradient Components",
-        parent=None,
-        cmap=None,
-        cmap_name="spectrum_fsl",
-        theme_name="Dark",
-        hemisphere_mode="both",
-        fsaverage_mesh="fsaverage4",
-    ):
-        """Create dialog from ndarray + affine."""
-        arr = np.asarray(volume_data, dtype=float)
-        if arr.ndim not in (3, 4):
-            raise ValueError(f"Expected 3D or 4D array. Got shape {arr.shape}.")
-        if affine is None:
-            affine = np.eye(4)
-        img = nib.Nifti1Image(arr, affine)
-        return cls(
-            img,
-            title=title,
-            parent=parent,
-            cmap=cmap,
-            cmap_name=cmap_name,
-            theme_name=theme_name,
-            hemisphere_mode=hemisphere_mode,
-            fsaverage_mesh=fsaverage_mesh,
-        )
-
-    @staticmethod
-    def _normalize_hemisphere_mode(value):
-        text = str(value or "both").strip().lower()
-        if text not in {"both", "lh", "rh"}:
-            text = "both"
-        return text
-
-    @staticmethod
-    def _normalize_fsaverage_mesh(value):
-        text = str(value or "fsaverage4").strip().lower()
-        valid = {"fsaverage3", "fsaverage4", "fsaverage5", "fsaverage6", "fsaverage7"}
-        if text not in valid:
-            text = "fsaverage4"
-        return text
-
-    def _hemisphere_label_text(self):
-        if self._hemisphere_mode == "lh":
-            return "LH lateral | LH medial"
-        if self._hemisphere_mode == "rh":
-            return "RH medial | RH lateral"
-        return "LH lateral | LH medial | RH medial | RH lateral"
-
-    @classmethod
-    def _get_surface_assets(cls, fsaverage_mesh="fsaverage4"):
-        """Load and cache fsaverage meshes/background maps once."""
-        mesh_name = cls._normalize_fsaverage_mesh(fsaverage_mesh)
-        if cls._surface_assets_cache is None:
-            cls._surface_assets_cache = {}
-        if mesh_name in cls._surface_assets_cache:
-            return cls._surface_assets_cache[mesh_name]
-
-        try:
-            fsaverage = datasets.fetch_surf_fsaverage(mesh=mesh_name)
-        except Exception:
-            try:
-                fsaverage = datasets.fetch_surf_fsaverage(mesh="fsaverage4")
-                mesh_name = "fsaverage4"
-            except Exception:
-                fsaverage = datasets.fetch_surf_fsaverage()
-                mesh_name = "fsaverage4"
-
-        mesh_left = surface.load_surf_mesh(fsaverage.pial_left)
-        mesh_right = surface.load_surf_mesh(fsaverage.pial_right)
-        sulc_left = surface.load_surf_data(fsaverage.sulc_left)
-        sulc_right = surface.load_surf_data(fsaverage.sulc_right)
-
-        cls._surface_assets_cache[mesh_name] = {
-            "mesh_left": mesh_left,
-            "mesh_right": mesh_right,
-            "sulc_left": sulc_left,
-            "sulc_right": sulc_right,
-        }
-        return cls._surface_assets_cache[mesh_name]
-
-    @staticmethod
-    def _compute_display_range(data_4d):
-        finite = data_4d[np.isfinite(data_4d)]
-        if finite.size == 0:
-            return -1.0, 1.0, None
-        nonzero = finite[finite != 0]
-        scale_data = nonzero if nonzero.size else finite
-        vmin = float(np.percentile(scale_data, 2))
-        vmax = float(np.percentile(scale_data, 98))
-        if not np.isfinite(vmin) or not np.isfinite(vmax) or np.isclose(vmin, vmax):
-            vmin = float(np.nanmin(scale_data))
-            vmax = float(np.nanmax(scale_data))
-        if np.isclose(vmin, vmax):
-            vmin -= 1.0
-            vmax += 1.0
-        threshold = None
-        if nonzero.size:
-            thr = float(np.percentile(np.abs(nonzero), 2))
-            if np.isfinite(thr) and thr > 0:
-                threshold = thr
-        return vmin, vmax, threshold
-
-    def _render(self):
-        self.figure.clear()
-        assets = self._get_surface_assets(self._fsaverage_mesh)
-
-        vmin, vmax, threshold = self._compute_display_range(self._data)
-        row_norm = Normalize(vmin=vmin, vmax=vmax)
-
-        if self._hemisphere_mode == "lh":
-            views = (
-                ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
-                ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
-            )
-        elif self._hemisphere_mode == "rh":
-            views = (
-                ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
-                ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
-            )
-        else:
-            views = (
-                ("left", "lateral", assets["mesh_left"], assets["sulc_left"], "LH Lateral"),
-                ("left", "medial", assets["mesh_left"], assets["sulc_left"], "LH Medial"),
-                ("right", "medial", assets["mesh_right"], assets["sulc_right"], "RH Medial"),
-                ("right", "lateral", assets["mesh_right"], assets["sulc_right"], "RH Lateral"),
-            )
-        n_view_cols = len(views)
-        gs = self.figure.add_gridspec(
-            self._n_components,
-            n_view_cols + 1,
-            width_ratios=[1.0] * n_view_cols + [0.05],
-            wspace=0.02,
-            hspace=0.08,
-        )
-
-        row_axes_all = []
-        for comp_idx in range(self._n_components):
-            comp_img = nib.Nifti1Image(self._data[..., comp_idx], self._img.affine)
-            texture_left = surface.vol_to_surf(
-                comp_img,
-                assets["mesh_left"],
-                radius=0.5,
-                interpolation="linear",
-            )
-            texture_right = surface.vol_to_surf(
-                comp_img,
-                assets["mesh_right"],
-                radius=0.5,
-                interpolation="linear",
-            )
-            textures = {"left": texture_left, "right": texture_right}
-            row_axes = []
-
-            for view_idx, (hemi, view, mesh, bg_map, view_label) in enumerate(views):
-                ax = self.figure.add_subplot(gs[comp_idx, view_idx], projection="3d")
-                plotting.plot_surf_stat_map(
-                    mesh,
-                    textures[hemi],
-                    hemi=hemi,
-                    view=view,
-                    bg_map=bg_map,
-                    cmap=self._cmap,
-                    colorbar=False,
-                    vmin=vmin,
-                    vmax=vmax,
-                    threshold=threshold,
-                    axes=ax,
-                )
-                ax.set_title(view_label, fontsize=9, pad=2)
-                row_axes.append(ax)
-            row_axes_all.append(row_axes)
-
-            cax = self.figure.add_subplot(gs[comp_idx, n_view_cols])
-            mappable = ScalarMappable(norm=row_norm, cmap=self._cmap)
-            mappable.set_array([])
-            cbar = self.figure.colorbar(mappable, cax=cax)
-            cbar.ax.tick_params(labelsize=8, length=2)
-            cbar.set_label("Gradient", fontsize=10)
-
-        # Center component titles per row at a safe height in the gap above each row.
-        prev_row_bottom = 0.99
-        for comp_idx, row_axes in enumerate(row_axes_all):
-            left_pos = row_axes[0].get_position()
-            right_pos = row_axes[-1].get_position()
-            center_x = (left_pos.x0 + right_pos.x1) / 2.0
-            row_top = max(ax.get_position().y1 for ax in row_axes)
-            row_bottom = min(ax.get_position().y0 for ax in row_axes)
-            gap_above = max(0.0, prev_row_bottom - row_top)
-            y_text = row_top + (0.28 * gap_above if gap_above > 0 else 0.006)
-            y_text = min(y_text, 0.972)
-            self.figure.text(
-                center_x,
-                y_text,
-                f"Gradient {comp_idx + 1}",
-                ha="center",
-                va="bottom",
-                fontsize=16,
-            )
-            prev_row_bottom = row_bottom
-
-        self.canvas.draw_idle()
-
-    def _save_figure(self):
-        default_name = f"gradient_components_{self._n_components}.png"
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Save gradient surface figure",
-            str(Path.cwd() / default_name),
-            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
-        )
-        if not path:
-            return
-        output_path = Path(path)
-        if output_path.suffix.lower() not in {".png", ".pdf", ".svg"}:
-            if "PDF" in selected_filter:
-                output_path = output_path.with_suffix(".pdf")
-            elif "SVG" in selected_filter:
-                output_path = output_path.with_suffix(".svg")
-            else:
-                output_path = output_path.with_suffix(".png")
-        self.figure.savefig(str(output_path), dpi=200, bbox_inches="tight")
 
 
 class GradientScatterDialog(QDialog):
@@ -401,6 +87,7 @@ class GradientScatterDialog(QDialog):
         y_label="Y axis",
         color_label="Gradient 1",
         gradient1_values=None,
+        path_metric_coords=None,
         parent=None,
         cmap=None,
         cmap_name="spectrum_fsl",
@@ -454,12 +141,25 @@ class GradientScatterDialog(QDialog):
             if group_data.shape != self._x.shape:
                 raise ValueError("Gradient scatter point hemisphere codes must match the axis lengths.")
         finite_mask = np.isfinite(self._x) & np.isfinite(self._y) & np.isfinite(color_data) & np.isfinite(gradient1_data)
+        metric_data = None
+        if path_metric_coords is not None:
+            metric_data = np.asarray(path_metric_coords, dtype=float)
+            if metric_data.ndim == 1:
+                metric_data = metric_data[:, np.newaxis]
+            if metric_data.ndim != 2 or metric_data.shape[0] != self._x.shape[0]:
+                raise ValueError("Gradient scatter path metric coordinates must match the axis lengths.")
+            finite_mask &= np.all(np.isfinite(metric_data), axis=1)
         if not np.any(finite_mask):
             raise ValueError("Gradient scatter requires finite data points.")
         self._x = self._x[finite_mask]
         self._y = self._y[finite_mask]
         self._color = color_data[finite_mask]
         self._gradient1 = gradient1_data[finite_mask]
+        self._path_metric_coords = (
+            np.asarray(metric_data[finite_mask, :], dtype=float)
+            if metric_data is not None
+            else None
+        )
         self._point_labels = np.asarray([str(value) for value in label_data[finite_mask].tolist()], dtype=object)
         self._point_ids = np.asarray([str(value) for value in point_id_data[finite_mask].tolist()], dtype=object)
         self._point_group_codes = np.asarray(group_data[finite_mask], dtype=int)
@@ -512,6 +212,10 @@ class GradientScatterDialog(QDialog):
         )
         self._proximity_radius = self._slider_to_radius(self._initial_proximity_slider_value)
         self._edge_distances = self._compute_edge_distances(self._display_coords, self._edge_pairs)
+        self._path_metric_edge_distances = self._compute_edge_distances(
+            self._path_metric_coords if self._path_metric_coords is not None else self._display_coords,
+            self._edge_pairs,
+        )
         self._fixed_xlim, self._fixed_ylim = self._compute_fixed_axes(self._display_coords)
         self._point_artist = None
         self._point_artist_entries = []
@@ -1126,7 +830,7 @@ class GradientScatterDialog(QDialog):
         visible = self._edge_distances <= (2.0 * self._proximity_radius + 1e-12)
         if not np.any(visible):
             return np.zeros(0, dtype=float)
-        return np.asarray(self._edge_distances[visible], dtype=float)
+        return np.asarray(self._path_metric_edge_distances[visible], dtype=float)
 
     def _active_edge_count(self):
         return int(self._visible_edge_pairs().shape[0])
@@ -1902,6 +1606,25 @@ class GradientScatterDialog(QDialog):
         return np.asarray(segments, dtype=float)
 
     @staticmethod
+    def _path_metric_length(coords, node_path):
+        nodes = np.asarray([int(node) for node in list(node_path or [])], dtype=int)
+        points = np.asarray(coords, dtype=float)
+        if nodes.size < 2 or points.ndim != 2 or points.shape[1] < 1:
+            return None
+        if np.any((nodes < 0) | (nodes >= points.shape[0])):
+            return None
+        path_points = np.asarray(points[nodes, :], dtype=float)
+        if not np.all(np.isfinite(path_points)):
+            return None
+        steps = np.diff(path_points, axis=0)
+        if steps.shape[0] == 0:
+            return None
+        lengths = np.linalg.norm(steps, axis=1)
+        if not np.all(np.isfinite(lengths)):
+            return None
+        return float(np.sum(lengths))
+
+    @staticmethod
     def _path_edge_pairs(node_path):
         nodes = np.asarray([int(node) for node in list(node_path or [])], dtype=int)
         if nodes.size < 2:
@@ -2014,6 +1737,11 @@ class GradientScatterDialog(QDialog):
         if visible_edge_pairs.shape[0] == 0:
             return None
         scatter_coords = np.column_stack((np.asarray(x_plot, dtype=float), np.asarray(y_plot, dtype=float)))
+        metric_coords = (
+            np.asarray(self._path_metric_coords, dtype=float)
+            if self._path_metric_coords is not None
+            else np.asarray(scatter_coords, dtype=float)
+        )
         project_group_paths = []
         valid_optimal_paths = []
 
@@ -2147,27 +1875,29 @@ class GradientScatterDialog(QDialog):
             optimal_full_path = []
             optimal_full_energy = None
             if all_full_paths:
-                ctx_energy_candidates = []
+                ctx_length_candidates = []
                 for path_nodes in list(all_full_paths):
-                    energy = self._ctx_full_path_energy(
-                        scatter_coords,
-                        path_nodes,
-                        anchors,
-                        path_order,
-                    )
-                    if energy is None or not np.isfinite(energy):
+                    path_length = self._path_metric_length(metric_coords, path_nodes)
+                    if path_length is None or not np.isfinite(path_length):
                         continue
-                    ctx_energy_candidates.append(
+                    ctx_length_candidates.append(
                         (
-                            float(energy),
+                            float(path_length),
                             len(list(path_nodes or [])),
                             [int(node) for node in list(path_nodes or [])],
                         )
                     )
-                if ctx_energy_candidates:
-                    ctx_energy_candidates.sort(key=lambda item: (item[0], item[1]))
-                    optimal_full_energy = float(ctx_energy_candidates[0][0])
-                    optimal_full_path = [int(node) for node in list(ctx_energy_candidates[0][2])]
+                if ctx_length_candidates:
+                    ctx_length_candidates.sort(key=lambda item: (item[0], item[1]))
+                    optimal_full_path = [int(node) for node in list(ctx_length_candidates[0][2])]
+                    highlight_energy = self._ctx_full_path_energy(
+                        scatter_coords,
+                        optimal_full_path,
+                        anchors,
+                        path_order,
+                    )
+                    if highlight_energy is not None and np.isfinite(highlight_energy):
+                        optimal_full_energy = float(highlight_energy)
             if not optimal_full_path:
                 fallback_path = self._combine_ordered_segments(valid_ordered_segments)
                 if len(fallback_path) >= 2:
@@ -2194,29 +1924,31 @@ class GradientScatterDialog(QDialog):
                 if start_index is not None and subc_anchor_index is not None:
                     subc_ref_unit = self._reference_unit_vector(start_index, int(subc_anchor_index))
                     if subc_ref_unit is not None:
-                        subc_energy_candidates = []
+                        subc_length_candidates = []
                         for path_nodes in list(subc_paths):
-                            energy = self._path_directionality_energy(
+                            path_length = self._path_metric_length(metric_coords, path_nodes)
+                            if path_length is None or not np.isfinite(path_length):
+                                continue
+                            subc_length_candidates.append(
+                                (
+                                    float(path_length),
+                                    len(list(path_nodes or [])),
+                                    [int(node) for node in list(path_nodes or [])],
+                                )
+                            )
+                        if subc_length_candidates:
+                            subc_length_candidates.sort(key=lambda item: (item[0], item[1]))
+                            subc_optimal_path = [int(node) for node in list(subc_length_candidates[0][2])]
+                            highlight_energy = self._path_directionality_energy(
                                 scatter_coords,
-                                path_nodes,
+                                subc_optimal_path,
                                 subc_ref_unit,
                                 line_start=np.asarray(scatter_coords[start_index, :], dtype=float),
                                 line_end=np.asarray(scatter_coords[int(subc_anchor_index), :], dtype=float),
                                 include_line_proximity=self._use_line_proximity_energy,
                             )
-                            if energy is None or not np.isfinite(energy):
-                                continue
-                            subc_energy_candidates.append(
-                                (
-                                    float(energy),
-                                    len(list(path_nodes or [])),
-                                    [int(node) for node in list(path_nodes or [])],
-                                )
-                            )
-                        if subc_energy_candidates:
-                            subc_energy_candidates.sort(key=lambda item: (item[0], item[1]))
-                            optimal_subc_energy = float(subc_energy_candidates[0][0])
-                            subc_optimal_path = [int(node) for node in list(subc_energy_candidates[0][2])]
+                            if highlight_energy is not None and np.isfinite(highlight_energy):
+                                optimal_subc_energy = float(highlight_energy)
 
             group_payload = {
                 "group": str(group_spec.get("name", "all")),
@@ -4347,133 +4079,6 @@ class GradientScatterDialog(QDialog):
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save gradient scatter figure",
-            str(Path.cwd() / default_name),
-            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
-        )
-        if not path:
-            return
-        output_path = Path(path)
-        if output_path.suffix.lower() not in {".png", ".pdf", ".svg"}:
-            if "PDF" in selected_filter:
-                output_path = output_path.with_suffix(".pdf")
-            elif "SVG" in selected_filter:
-                output_path = output_path.with_suffix(".svg")
-            else:
-                output_path = output_path.with_suffix(".png")
-        self.figure.savefig(str(output_path), dpi=200, bbox_inches="tight")
-
-
-class GradientFreeEnergyDialog(QDialog):
-    """Order-plot viewer for path directionality energies and free energies."""
-
-    def __init__(self, payload, *, parent=None, theme_name="Dark"):
-        super().__init__(parent)
-        self._payload = dict(payload or {})
-        self._theme_name = "Dark"
-        self.setWindowTitle(f"Free Energy - {str(self._payload.get('title', 'Gradients'))}")
-
-        self.figure = Figure(figsize=(11.2, 6.8), constrained_layout=True)
-        self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-
-        lambda_value = float(self._payload.get("lambda", 1.0))
-        axis_text = f"{str(self._payload.get('y_axis_label', 'Y'))} vs {str(self._payload.get('x_axis_label', 'X'))}"
-        include_line_proximity = bool(self._payload.get("use_line_proximity_energy", True))
-        if include_line_proximity:
-            energy_text = "Energy = sum((1 - step_unit dot ref_unit) + d_line / |ref|)"
-        else:
-            energy_text = "Energy = sum(1 - step_unit dot ref_unit)"
-        self.info_label = QLabel(
-            f"lambda = {lambda_value:.3f} | {energy_text} | {axis_text}"
-        )
-        self.save_button = QPushButton("Save Figure")
-        self.save_button.clicked.connect(self._save_figure)
-
-        controls = QHBoxLayout()
-        controls.addWidget(self.info_label, 1)
-        controls.addWidget(self.save_button, 0)
-
-        layout = QVBoxLayout(self)
-        layout.addLayout(controls)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self.canvas, 1)
-
-        self.set_theme(theme_name)
-        self._render()
-
-    def set_theme(self, theme_name="Dark"):
-        theme, style = _dialog_theme_stylesheet(theme_name)
-        self._theme_name = theme
-        self.setStyleSheet(style)
-
-    def _render(self):
-        self.figure.clear()
-        groups = [dict(group) for group in list(self._payload.get("groups", []))]
-        if not groups:
-            ax = self.figure.add_subplot(111)
-            ax.text(0.5, 0.5, "No free-energy paths available.", ha="center", va="center")
-            ax.axis("off")
-            self.canvas.draw_idle()
-            return
-
-        n_rows = len(groups)
-        n_cols = max(1, max(len(list(dict(group).get("families", []))) for group in groups))
-        axes = np.asarray(self.figure.subplots(n_rows, n_cols, squeeze=False), dtype=object)
-        title_text = str(self._payload.get("title", "Gradients"))
-        rotation_text = str(self._payload.get("rotation", "Default"))
-        self.figure.suptitle(f"Free Energy Order Plot - {title_text} | Rotation: {rotation_text}", fontsize=12)
-
-        for row_idx, group in enumerate(groups):
-            families = [dict(family) for family in list(group.get("families", []))]
-            for col_idx in range(n_cols):
-                ax = axes[row_idx, col_idx]
-                if col_idx >= len(families):
-                    ax.axis("off")
-                    continue
-                family = families[col_idx]
-                energies = np.sort(np.asarray(family.get("energies", []), dtype=float).reshape(-1))
-                if energies.size == 0:
-                    ax.text(0.5, 0.5, "No paths", ha="center", va="center")
-                    ax.axis("off")
-                    continue
-                x_order = np.arange(1, energies.size + 1, dtype=int)
-                color = np.asarray(family.get("color", (0.2, 0.2, 0.2)), dtype=float).reshape(-1)
-                if color.shape != (3,):
-                    color = np.asarray((0.2, 0.2, 0.2), dtype=float)
-                free_energy = float(family.get("free_energy", float("nan")))
-                ax.plot(
-                    x_order,
-                    energies,
-                    color=tuple(color.tolist()),
-                    marker="o",
-                    markersize=3.8,
-                    linewidth=1.2,
-                    alpha=0.95,
-                )
-                if np.isfinite(free_energy):
-                    ax.axhline(
-                        free_energy,
-                        color=tuple(color.tolist()),
-                        linestyle="--",
-                        linewidth=1.0,
-                        alpha=0.7,
-                    )
-                ax.set_title(
-                    f"{str(group.get('group', 'all')).upper()} | {str(family.get('label', 'path'))}\n"
-                    f"F={free_energy:.4f} | n={int(family.get('n_paths', energies.size))}",
-                    fontsize=10,
-                )
-                ax.set_xlabel("Ordered path rank")
-                ax.set_ylabel("Energy")
-                ax.grid(True, alpha=0.25)
-
-        self.canvas.draw_idle()
-
-    def _save_figure(self):
-        default_name = "gradient_free_energy.png"
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Save free-energy figure",
             str(Path.cwd() / default_name),
             "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
         )
