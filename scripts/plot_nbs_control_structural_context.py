@@ -6,8 +6,11 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
@@ -19,14 +22,13 @@ if not SHOW_FIGURES_REQUESTED:
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from nilearn import plotting
 from scipy import stats
 
 
 ########## LOCAL HELPERS ##########
 VIEWER_ROOT = Path(__file__).resolve().parents[1]
-TARGET_HELPER_RELATIVE = Path("experiments") / "nbs_metsim_rc_overlap" / "analyze_nbs_metsim_rc_overlap.py"
+RICHCLUB_DENSITIES = [0.01, 0.05, 0.10, 0.20]
 
 
 def _candidate_toolbox_roots() -> list[Path]:
@@ -48,75 +50,595 @@ def _candidate_toolbox_roots() -> list[Path]:
 
     add_candidate(VIEWER_ROOT / "mrsitoolbox")
     add_candidate(VIEWER_ROOT.parent / "mrsitoolbox")
+    add_candidate(Path.cwd())
+    add_candidate(Path.cwd() / "mrsitoolbox")
 
-    devanalyse = str(os.getenv("DEVANALYSEPATH") or "").strip()
-    if devanalyse:
-        dev_root = Path(devanalyse)
-        add_candidate(dev_root / "mrsitoolbox")
-        add_candidate(dev_root)
+    for env_name in ("MRSITOOLBOX_ROOT", "DEVANALYSEPATH"):
+        env_value = str(os.getenv(env_name) or "").strip()
+        if not env_value:
+            continue
+        env_root = Path(env_value)
+        add_candidate(env_root / "mrsitoolbox")
+        add_candidate(env_root)
 
     try:
-        import mrsitoolbox  # type: ignore
+        import connectomics as connectomics_pkg  # type: ignore
     except Exception:
         pass
     else:
-        module_path = Path(getattr(mrsitoolbox, "__file__", "")).resolve()
+        module_path = Path(getattr(connectomics_pkg, "__file__", "")).resolve()
         add_candidate(module_path.parent.parent)
 
     return candidates
 
 
-def _resolve_toolbox_root_and_helper() -> tuple[Path, Path]:
+def _load_netbasedanalysis() -> tuple[type, Path | None]:
+    try:
+        from connectomics.network import NetBasedAnalysis as imported_nba  # type: ignore
+        import connectomics.network as network_module  # type: ignore
+    except Exception:
+        pass
+    else:
+        module_path = Path(getattr(network_module, "__file__", "")).resolve()
+        return imported_nba, module_path.parent.parent
+
     roots = _candidate_toolbox_roots()
+    searched: list[str] = []
+    load_errors: list[str] = []
     for toolbox_root in roots:
-        helper_path = toolbox_root / TARGET_HELPER_RELATIVE
-        if helper_path.exists():
-            return toolbox_root, helper_path
-    searched = "\n".join(str(root / TARGET_HELPER_RELATIVE) for root in roots)
+        network_path = toolbox_root / "connectomics" / "network.py"
+        searched.append(str(network_path))
+        if not network_path.exists():
+            continue
+        if str(toolbox_root) not in sys.path:
+            sys.path.insert(0, str(toolbox_root))
+        spec = importlib.util.spec_from_file_location("mrsi_local_network", network_path)
+        if spec is None or spec.loader is None:
+            load_errors.append(f"{network_path}: could not build import spec")
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            load_errors.append(f"{network_path}: {exc}")
+            continue
+        return module.NetBasedAnalysis, toolbox_root
+
+    searched_text = "\n".join(searched) if searched else "(no candidate toolbox roots)"
+    error_text = "\n".join(load_errors)
+    details = f"Tried:\n{searched_text}"
+    if error_text:
+        details = f"{details}\nLoad errors:\n{error_text}"
     raise FileNotFoundError(
-        "Could not find analyze_nbs_metsim_rc_overlap.py. Tried:\n"
-        f"{searched}"
+        "Could not find a usable mrsitoolbox connectomics/network.py for rich-club analysis.\n"
+        f"{details}"
     )
 
 
-MRSITOOLBOX_ROOT, OVERLAP_MODULE_PATH = _resolve_toolbox_root_and_helper()
-if str(MRSITOOLBOX_ROOT) not in sys.path:
+NetBasedAnalysis, MRSITOOLBOX_ROOT = _load_netbasedanalysis()
+if MRSITOOLBOX_ROOT is not None and str(MRSITOOLBOX_ROOT) not in sys.path:
     sys.path.insert(0, str(MRSITOOLBOX_ROOT))
 
-OVERLAP_SPEC = importlib.util.spec_from_file_location("nbs_metsim_rc_overlap_helpers", OVERLAP_MODULE_PATH)
-if OVERLAP_SPEC is None or OVERLAP_SPEC.loader is None:
-    raise ImportError(f"Could not load helper module from {OVERLAP_MODULE_PATH}")
-OVERLAP_MODULE = importlib.util.module_from_spec(OVERLAP_SPEC)
-sys.modules[OVERLAP_SPEC.name] = OVERLAP_MODULE
-OVERLAP_SPEC.loader.exec_module(OVERLAP_MODULE)
 
-MatrixBundle = OVERLAP_MODULE.MatrixBundle
-load_matrix_bundle = OVERLAP_MODULE.load_matrix_bundle
-extract_selected_nbs_mask = OVERLAP_MODULE.extract_selected_nbs_mask
-build_nbs_edge_table = OVERLAP_MODULE.build_nbs_edge_table
-parse_nuisance_from_filename = OVERLAP_MODULE.parse_nuisance_from_filename
-parse_t_threshold_from_filename = OVERLAP_MODULE.parse_t_threshold_from_filename
-default_output_subdir = OVERLAP_MODULE.default_output_subdir
-infer_project_names = OVERLAP_MODULE.infer_project_names
-discover_bids_root = OVERLAP_MODULE.discover_bids_root
-resolve_structural_path = OVERLAP_MODULE.resolve_structural_path
-align_nbs_and_structural_parcels = OVERLAP_MODULE.align_nbs_and_structural_parcels
-align_bundle_to_pairs = OVERLAP_MODULE.align_bundle_to_pairs
-print_section = OVERLAP_MODULE.print_section
-info = OVERLAP_MODULE.info
-_as_int = OVERLAP_MODULE._as_int
-_as_str = OVERLAP_MODULE._as_str
-_safe_name_array = OVERLAP_MODULE._safe_name_array
-_covars_to_df = OVERLAP_MODULE._covars_to_df
-_ensure_pair_columns = OVERLAP_MODULE._ensure_pair_columns
-_pair_keys = OVERLAP_MODULE._pair_keys
-_resolve_column = OVERLAP_MODULE._resolve_column
-_symmetrize_matrix = OVERLAP_MODULE._symmetrize_matrix
-_json_ready = OVERLAP_MODULE._json_ready
-NetBasedAnalysis = OVERLAP_MODULE.NetBasedAnalysis
-RICHCLUB_DENSITIES = OVERLAP_MODULE.RICHCLUB_DENSITIES
+@dataclass
+class MatrixBundle:
+    path: Path
+    matrices: np.ndarray
+    parcel_labels: np.ndarray
+    parcel_names: np.ndarray
+    subject_ids: np.ndarray
+    session_ids: np.ndarray
+    covars_df: pd.DataFrame
+    metadata: dict[str, object]
 
-from tools.debug import Debug
+
+########## PRINT HELPERS ##########
+def print_section(name: str) -> None:
+    print(f"\n########## {name.upper()} ##########", flush=True)
+
+
+def info(message: str) -> None:
+    print(message, flush=True)
+
+
+def warn(message: str) -> None:
+    print(f"Warning: {message}", flush=True)
+
+
+########## GENERIC HELPERS ##########
+def _scalar(value: object) -> object:
+    if isinstance(value, np.ndarray) and value.ndim == 0:
+        return value.item()
+    return value
+
+
+def _as_str(value: object) -> str:
+    if value is None:
+        return ""
+    return str(_scalar(value)).strip()
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(_scalar(value))
+    except Exception:
+        return default
+
+
+def _normalize_token(value: object, prefix: str | None = None) -> str:
+    token = _as_str(value)
+    lowered = token.lower()
+    if prefix and lowered.startswith(prefix.lower()):
+        token = token[len(prefix):]
+    return token.strip()
+
+
+def _normalize_subject_session(subject_id: object, session_id: object) -> tuple[str, str]:
+    return (
+        _normalize_token(subject_id, prefix="sub-"),
+        _normalize_token(session_id, prefix="ses-"),
+    )
+
+
+def _resolve_column(df: pd.DataFrame, *candidates: str) -> str | None:
+    lower_map = {col.lower(): col for col in df.columns}
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+        hit = lower_map.get(candidate.lower())
+        if hit is not None:
+            return hit
+    return None
+
+
+def _covars_to_df(raw_covars: object) -> pd.DataFrame:
+    if raw_covars is None:
+        return pd.DataFrame()
+    arr = np.asarray(raw_covars)
+    if arr.size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.DataFrame.from_records(arr)
+    except Exception:
+        return pd.DataFrame(arr)
+
+
+def _ensure_pair_columns(df: pd.DataFrame, subject_ids: np.ndarray, session_ids: np.ndarray) -> pd.DataFrame:
+    df = df.copy()
+    subj_col = _resolve_column(df, "participant_id", "subject_id")
+    sess_col = _resolve_column(df, "session_id", "session")
+    if subj_col is None:
+        df.insert(0, "participant_id", np.asarray(subject_ids, dtype=object))
+        subj_col = "participant_id"
+    if sess_col is None:
+        insert_idx = 1 if subj_col == "participant_id" else 0
+        df.insert(insert_idx, "session_id", np.asarray(session_ids, dtype=object))
+        sess_col = "session_id"
+    df["_pair_subject"] = [_normalize_token(val, prefix="sub-") for val in df[subj_col].astype(str)]
+    df["_pair_session"] = [_normalize_token(val, prefix="ses-") for val in df[sess_col].astype(str)]
+    return df
+
+
+def _pair_keys(subject_ids: Iterable[object], session_ids: Iterable[object]) -> list[tuple[str, str]]:
+    return [_normalize_subject_session(sid, ses) for sid, ses in zip(subject_ids, session_ids)]
+
+
+def _safe_name_array(raw: object, fallback_labels: np.ndarray) -> np.ndarray:
+    arr = np.asarray(raw) if raw is not None else np.array([], dtype=object)
+    if arr.size == len(fallback_labels):
+        return arr.astype(object)
+    return np.asarray([str(label) for label in fallback_labels], dtype=object)
+
+
+def _json_ready(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return [_json_ready(item) for item in value.tolist()]
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_ready(val) for key, val in value.items()}
+    return value
+
+
+########## INPUT LOADERS ##########
+def load_matrix_bundle(npz_path: Path) -> MatrixBundle:
+    data = np.load(npz_path, allow_pickle=True)
+    matrices = np.asarray(data["matrix_subj_list"], dtype=float)
+    parcel_labels = np.asarray(data["parcel_labels_group"])
+    parcel_names = _safe_name_array(
+        data["parcel_names_group"] if "parcel_names_group" in data.files else None,
+        parcel_labels,
+    )
+    subject_ids = np.asarray(data["subject_id_list"]).astype(str)
+    session_ids = np.asarray(data["session_id_list"]).astype(str)
+    covars_df = _covars_to_df(data["covars"] if "covars" in data.files else None)
+    covars_df = _ensure_pair_columns(covars_df, subject_ids, session_ids)
+    metadata = {
+        "group": _as_str(data["group"]) if "group" in data.files else "",
+        "modality": _as_str(data["modality"]) if "modality" in data.files else "",
+    }
+    return MatrixBundle(
+        path=npz_path,
+        matrices=matrices,
+        parcel_labels=parcel_labels,
+        parcel_names=parcel_names,
+        subject_ids=subject_ids,
+        session_ids=session_ids,
+        covars_df=covars_df,
+        metadata=metadata,
+    )
+
+
+########## NBS HELPERS ##########
+def parse_nuisance_from_filename(path: Path) -> list[str]:
+    match = re.search(r"_nuis-([^_]+)", path.name)
+    if not match:
+        return []
+    return [token for token in match.group(1).split("-") if token]
+
+
+def parse_t_threshold_from_filename(path: Path) -> str | None:
+    match = re.search(r"_th-([^_]+)", path.name)
+    if not match:
+        return None
+    token = match.group(1).strip()
+    return token if token else None
+
+
+def default_output_subdir(input_nbs: Path, base_name: str) -> Path:
+    threshold = parse_t_threshold_from_filename(input_nbs)
+    if threshold is None:
+        return input_nbs.parent / base_name
+    return input_nbs.parent / f"{base_name}_th-{threshold}"
+
+
+def extract_selected_nbs_mask(nbs_data: np.lib.npyio.NpzFile, component_index: int | None) -> tuple[np.ndarray, dict[str, object]]:
+    comp_masks = None
+    if "comp_masks" in nbs_data.files:
+        comp_masks = np.asarray(nbs_data["comp_masks"]).astype(bool)
+        if comp_masks.ndim == 2:
+            comp_masks = comp_masks[None, ...]
+
+    sig_indices = np.asarray(nbs_data["sig_indices"] if "sig_indices" in nbs_data.files else [], dtype=int)
+    comp_pvals = np.asarray(nbs_data["comp_pvals"] if "comp_pvals" in nbs_data.files else [], dtype=float)
+
+    if component_index is not None:
+        if comp_masks is None:
+            raise ValueError("Requested a component index but `comp_masks` is missing in the NBS NPZ.")
+        if component_index < 0 or component_index >= comp_masks.shape[0]:
+            raise ValueError(
+                f"Component index {component_index} is out of range for {comp_masks.shape[0]} component(s)."
+            )
+        return np.asarray(comp_masks[component_index], dtype=bool), {
+            "component_mode": "single",
+            "component_index": int(component_index),
+            "component_pvalue": float(comp_pvals[component_index]) if component_index < len(comp_pvals) else np.nan,
+        }
+
+    if "sig_mask" in nbs_data.files:
+        sig_mask = np.asarray(nbs_data["sig_mask"], dtype=bool)
+        if np.any(sig_mask):
+            return sig_mask, {
+                "component_mode": "significant_union",
+                "component_indices": sig_indices.astype(int).tolist(),
+                "component_pvalues": comp_pvals[sig_indices].astype(float).tolist() if sig_indices.size else [],
+            }
+
+    if comp_masks is not None and comp_masks.size:
+        return np.any(comp_masks, axis=0).astype(bool), {
+            "component_mode": "all_union_fallback",
+            "component_indices": list(range(comp_masks.shape[0])),
+            "component_pvalues": comp_pvals.astype(float).tolist(),
+        }
+
+    if "comp_mask" in nbs_data.files:
+        component_idx = nbs_data["component_idx"] if "component_idx" in nbs_data.files else -1
+        return np.asarray(nbs_data["comp_mask"], dtype=bool), {
+            "component_mode": "single_saved_mask",
+            "component_index": _as_int(component_idx, default=-1),
+        }
+
+    raise ValueError("Could not extract an NBS mask from the provided NPZ.")
+
+
+def build_nbs_edge_table(mask: np.ndarray, parcel_labels: np.ndarray, parcel_names: np.ndarray, t_matrix: np.ndarray | None) -> pd.DataFrame:
+    rows, cols = np.where(np.triu(mask, k=1))
+    records = []
+    for row_idx, col_idx in zip(rows.tolist(), cols.tolist()):
+        record = {
+            "node_i": int(row_idx),
+            "node_j": int(col_idx),
+            "label_i": parcel_labels[row_idx],
+            "label_j": parcel_labels[col_idx],
+            "name_i": str(parcel_names[row_idx]),
+            "name_j": str(parcel_names[col_idx]),
+        }
+        if t_matrix is not None and t_matrix.shape == mask.shape:
+            record["t_value"] = float(t_matrix[row_idx, col_idx])
+        records.append(record)
+    return pd.DataFrame.from_records(records)
+
+
+########## PATH RESOLUTION ##########
+def infer_project_names(input_nbs: Path, nbs_data: np.lib.npyio.NpzFile) -> list[str]:
+    candidates: list[str] = []
+    try:
+        candidates.append(input_nbs.parents[2].name)
+    except Exception:
+        pass
+
+    stored_connectivity = _as_str(nbs_data["connectivity_path"]) if "connectivity_path" in nbs_data.files else ""
+    if stored_connectivity:
+        match = re.search(r"/([^/]+)/derivatives/", stored_connectivity)
+        if match:
+            candidates.append(match.group(1))
+        stem = Path(stored_connectivity).name
+        if "_atlas-" in stem:
+            candidates.append(stem.split("_atlas-", 1)[0])
+        elif "-atlas-" in stem:
+            candidates.append(stem.split("-atlas-", 1)[0])
+
+    group_meta = _as_str(nbs_data["group"]) if "group" in nbs_data.files else ""
+    if group_meta:
+        candidates.append(group_meta)
+
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            ordered.append(candidate)
+            seen.add(candidate)
+    return ordered
+
+
+def discover_bids_root(project_names: list[str], bids_dir: str | None, connectivity_hint: str | None) -> Path | None:
+    candidate_roots: list[Path] = []
+
+    if bids_dir:
+        root = Path(bids_dir).expanduser().resolve()
+        if root.exists():
+            if (root / "derivatives").exists():
+                candidate_roots.append(root)
+            else:
+                for project_name in project_names:
+                    child = root / project_name
+                    if child.exists() and (child / "derivatives").exists():
+                        candidate_roots.append(child)
+
+    if connectivity_hint:
+        hint_path = Path(connectivity_hint)
+        parts = hint_path.parts
+        if "derivatives" in parts:
+            idx = parts.index("derivatives")
+            root = Path(*parts[:idx])
+            if root.exists():
+                candidate_roots.append(root)
+
+    for search_root in (Path("/media"), Path("/mnt")):
+        if not search_root.exists():
+            continue
+        for project_name in project_names:
+            for hit in search_root.glob(f"*/{project_name}"):
+                if hit.exists() and (hit / "derivatives").exists():
+                    candidate_roots.append(hit)
+
+    seen = set()
+    ordered = []
+    for root in candidate_roots:
+        root = root.resolve()
+        if root not in seen:
+            ordered.append(root)
+            seen.add(root)
+    return ordered[0] if ordered else None
+
+
+def infer_atlas_tokens(input_nbs: Path, nbs_data: np.lib.npyio.NpzFile) -> list[str]:
+    tokens = []
+    atlas_from_dir = input_nbs.parent.name
+    if atlas_from_dir:
+        tokens.extend(
+            [
+                atlas_from_dir,
+                atlas_from_dir.replace("-scale", "_scale"),
+                atlas_from_dir.replace("_scale", "-scale"),
+            ]
+        )
+
+    parc_scheme = _as_str(nbs_data["parc_scheme"]) if "parc_scheme" in nbs_data.files else ""
+    scale = _as_int(nbs_data["scale"], default=0)
+    if parc_scheme and scale:
+        tokens.extend(
+            [
+                f"chimera{parc_scheme}_scale{scale}",
+                f"chimera{parc_scheme}-scale{scale}",
+                f"{parc_scheme}_scale{scale}",
+                f"{parc_scheme}-scale{scale}",
+            ]
+        )
+
+    seen = set()
+    ordered = []
+    for token in tokens:
+        if token and token not in seen:
+            ordered.append(token)
+            seen.add(token)
+    return ordered
+
+
+def resolve_structural_path(
+    input_nbs: Path,
+    nbs_data: np.lib.npyio.NpzFile,
+    input_struct: str | None,
+    bids_root: Path | None,
+) -> Path:
+    if input_struct:
+        path = Path(input_struct).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Structural NPZ not found: {path}")
+        return path
+
+    if bids_root is None:
+        raise FileNotFoundError("Could not resolve a BIDS root automatically. Pass --bids_dir or --input_struct.")
+
+    atlas_tokens = infer_atlas_tokens(input_nbs, nbs_data)
+    project_names = infer_project_names(input_nbs, nbs_data)
+    dwi_dirs = [
+        bids_root / "derivatives" / "group" / "connectivity" / "dwi",
+        bids_root / "derivatives" / "group" / "connectivity" / "multimodal",
+    ]
+
+    exact_candidates = []
+    for project_name in project_names:
+        for dwi_dir in dwi_dirs:
+            for atlas_token in atlas_tokens:
+                exact_candidates.append(dwi_dir / f"{project_name}_atlas-{atlas_token}_desc-group_connectivity_dwi.npz")
+                exact_candidates.append(
+                    dwi_dir / f"{project_name}_atlas-{atlas_token}_desc-group_connectivity_dwi_key-matrix_subj_list_reg-Diag_n-49_nbs_input.npz"
+                )
+                exact_candidates.append(
+                    dwi_dir / f"{project_name}_atlas-{atlas_token}_desc-group_connectivity_dwi_key-matrix_subj_list_reg-Diag_n-47_nbs_input.npz"
+                )
+
+    for candidate in exact_candidates:
+        if candidate.exists():
+            return candidate
+
+    parc_scheme = _as_str(nbs_data["parc_scheme"]) if "parc_scheme" in nbs_data.files else ""
+    scale = _as_int(nbs_data["scale"], default=0)
+    glob_hits = []
+    for dwi_dir in dwi_dirs:
+        if not dwi_dir.exists():
+            continue
+        for atlas_token in atlas_tokens:
+            glob_hits.extend(sorted(dwi_dir.glob(f"*atlas*{atlas_token.replace('-', '*').replace('_', '*')}*dwi*.npz")))
+        if parc_scheme and scale:
+            glob_hits.extend(sorted(dwi_dir.glob(f"*{parc_scheme}*scale{scale}*dwi*.npz")))
+
+    if glob_hits:
+        glob_hits = sorted(
+            glob_hits,
+            key=lambda path: (
+                "nbs_input" in path.name.lower(),
+                "multimodal" in str(path.parent).lower(),
+                len(path.name),
+            ),
+        )
+        return glob_hits[0]
+
+    raise FileNotFoundError("Could not locate a structural connectivity NPZ. Pass --input_struct explicitly.")
+
+
+########## ALIGNMENT HELPERS ##########
+def align_nbs_and_structural_parcels(
+    structural_bundle: MatrixBundle,
+    nbs_labels: np.ndarray,
+    nbs_names: np.ndarray,
+    nbs_mask: np.ndarray,
+    t_matrix: np.ndarray | None,
+    strict: bool,
+) -> tuple[MatrixBundle, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, dict[str, object]]:
+    label_to_index = {int(label): idx for idx, label in enumerate(structural_bundle.parcel_labels.tolist())}
+    keep_nbs_indices = [idx for idx, label in enumerate(nbs_labels.tolist()) if int(label) in label_to_index]
+    missing_labels = [int(label) for label in nbs_labels.tolist() if int(label) not in label_to_index]
+    if missing_labels and strict:
+        raise ValueError(
+            f"Structural matrix is missing {len(missing_labels)} NBS parcel label(s). "
+            f"First missing labels: {missing_labels[:10]}"
+        )
+
+    keep_nbs_indices_arr = np.asarray(keep_nbs_indices, dtype=int)
+    keep_struct_indices_arr = np.asarray(
+        [label_to_index[int(nbs_labels[idx])] for idx in keep_nbs_indices_arr.tolist()],
+        dtype=int,
+    )
+
+    aligned_struct = MatrixBundle(
+        path=structural_bundle.path,
+        matrices=structural_bundle.matrices[:, keep_struct_indices_arr][:, :, keep_struct_indices_arr],
+        parcel_labels=structural_bundle.parcel_labels[keep_struct_indices_arr],
+        parcel_names=structural_bundle.parcel_names[keep_struct_indices_arr],
+        subject_ids=structural_bundle.subject_ids,
+        session_ids=structural_bundle.session_ids,
+        covars_df=structural_bundle.covars_df,
+        metadata=structural_bundle.metadata,
+    )
+    aligned_nbs_labels = nbs_labels[keep_nbs_indices_arr]
+    aligned_nbs_names = nbs_names[keep_nbs_indices_arr]
+    aligned_nbs_mask = nbs_mask[np.ix_(keep_nbs_indices_arr, keep_nbs_indices_arr)]
+    aligned_t_matrix = (
+        t_matrix[np.ix_(keep_nbs_indices_arr, keep_nbs_indices_arr)]
+        if t_matrix is not None and t_matrix.shape == nbs_mask.shape
+        else t_matrix
+    )
+    parcel_meta = {
+        "n_nbs_nodes_original": int(len(nbs_labels)),
+        "n_struct_nodes_original": int(len(structural_bundle.parcel_labels)),
+        "n_nodes_intersection": int(len(aligned_nbs_labels)),
+        "missing_nbs_labels_in_struct": missing_labels,
+        "nbs_edges_original": int(np.triu(nbs_mask, k=1).sum()),
+        "nbs_edges_after_intersection": int(np.triu(aligned_nbs_mask, k=1).sum()),
+    }
+    return aligned_struct, aligned_nbs_labels, aligned_nbs_names, aligned_nbs_mask, aligned_t_matrix, parcel_meta
+
+
+def align_bundle_to_pairs(
+    bundle: MatrixBundle,
+    target_pairs: list[tuple[str, str]],
+) -> tuple[MatrixBundle, list[int], list[int], list[tuple[str, str]]]:
+    pair_to_index = {}
+    for idx, pair in enumerate(_pair_keys(bundle.subject_ids, bundle.session_ids)):
+        if pair not in pair_to_index:
+            pair_to_index[pair] = idx
+
+    indices = []
+    target_indices = []
+    missing = []
+    for target_idx, pair in enumerate(target_pairs):
+        if pair in pair_to_index:
+            indices.append(pair_to_index[pair])
+            target_indices.append(target_idx)
+        else:
+            missing.append(pair)
+
+    if missing:
+        missing_text = ", ".join(f"{sub}-{ses}" for sub, ses in missing[:20])
+        suffix = "" if len(missing) <= 20 else ", ..."
+        warn(
+            f"{bundle.path.name} is missing {len(missing)} subject-session pair(s). "
+            f"Skipping: {missing_text}{suffix}"
+        )
+
+    if not indices:
+        raise ValueError(f"{bundle.path.name} has no overlap with the NBS subject-session pairs.")
+
+    covars_df = bundle.covars_df.iloc[indices].reset_index(drop=True) if not bundle.covars_df.empty else pd.DataFrame()
+    aligned = MatrixBundle(
+        path=bundle.path,
+        matrices=bundle.matrices[indices],
+        parcel_labels=bundle.parcel_labels,
+        parcel_names=bundle.parcel_names,
+        subject_ids=bundle.subject_ids[indices],
+        session_ids=bundle.session_ids[indices],
+        covars_df=covars_df,
+        metadata=bundle.metadata,
+    )
+    return aligned, indices, target_indices, missing
+
+
+########## RICH-CLUB HELPERS ##########
+def _symmetrize_matrix(matrix: np.ndarray) -> np.ndarray:
+    out = np.asarray(matrix, dtype=float)
+    out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    out = 0.5 * (out + out.T)
+    np.fill_diagonal(out, 0.0)
+    return out
 
 
 ########## STYLE ##########
@@ -158,8 +680,15 @@ EDGE_CLASS_COLORS = {
     "local": "#55a868",
 }
 
-debug = Debug()
-sns.set_theme(style="whitegrid", context="talk")
+try:
+    plt.style.use("seaborn-v0_8-whitegrid")
+except OSError:
+    pass
+plt.rcParams.update({
+    "axes.grid": True,
+    "axes.axisbelow": True,
+    "grid.alpha": 0.35,
+})
 
 
 ########## GENERIC HELPERS ##########
@@ -682,49 +1211,83 @@ def plot_strength_violin(
     output_stem: Path,
 ) -> dict[str, str]:
     fig, ax = plt.subplots(figsize=(7.5, 6.5))
-    sns.violinplot(
-        data=df_strength_groups,
-        x="group",
-        y="control_structural_strength",
-        hue="group",
-        palette=NBS_GROUP_COLORS,
-        inner=None,
-        cut=0,
-        linewidth=1.1,
-        width=VIOLIN_WIDTH,
-        dodge=False,
-        ax=ax,
+
+    preferred_order = ["Non-NBS nodes", "NBS nodes"]
+    available_groups = list(pd.unique(df_strength_groups["group"]))
+    group_order = [group for group in preferred_order if group in available_groups]
+    group_order.extend(group for group in available_groups if group not in group_order)
+
+    plot_groups: list[str] = []
+    grouped_values: list[np.ndarray] = []
+    for group in group_order:
+        values = (
+            df_strength_groups.loc[
+                df_strength_groups["group"] == group,
+                "control_structural_strength",
+            ]
+            .dropna()
+            .to_numpy(dtype=float)
+        )
+        if values.size == 0:
+            continue
+        plot_groups.append(group)
+        grouped_values.append(values)
+
+    if not grouped_values:
+        raise ValueError("No structural strength values were available to plot.")
+
+    positions = np.arange(len(plot_groups), dtype=float)
+    violin = ax.violinplot(
+        grouped_values,
+        positions=positions,
+        widths=VIOLIN_WIDTH,
+        showmeans=False,
+        showextrema=False,
+        showmedians=False,
     )
-    if ax.legend_ is not None:
-        ax.legend_.remove()
-    sns.boxplot(
-        data=df_strength_groups,
-        x="group",
-        y="control_structural_strength",
-        width=0.25,
+    for body, group in zip(violin["bodies"], plot_groups):
+        body.set_facecolor(NBS_GROUP_COLORS.get(group, "#808080"))
+        body.set_edgecolor("black")
+        body.set_alpha(0.82)
+        body.set_linewidth(1.1)
+
+    ax.boxplot(
+        grouped_values,
+        positions=positions,
+        widths=0.25,
         showfliers=False,
-        boxprops={"facecolor": "white", "zorder": 3},
-        whiskerprops={"linewidth": 1.2},
+        patch_artist=True,
+        manage_ticks=False,
+        boxprops={"facecolor": "white", "edgecolor": "black", "linewidth": 1.2},
+        whiskerprops={"color": "black", "linewidth": 1.2},
+        capprops={"color": "black", "linewidth": 1.2},
         medianprops={"color": "black", "linewidth": 1.5},
-        ax=ax,
     )
-    sns.stripplot(
-        data=df_strength_groups,
-        x="group",
-        y="control_structural_strength",
-        color="black",
-        alpha=0.55,
-        size=4,
-        jitter=0.16,
-        ax=ax,
-    )
+
+    rng = np.random.default_rng(42)
+    for pos, values in zip(positions, grouped_values):
+        jitter = rng.uniform(-0.08, 0.08, size=values.size)
+        ax.scatter(
+            np.full(values.size, pos) + jitter,
+            values,
+            color="black",
+            alpha=0.55,
+            s=16,
+            linewidths=0,
+            zorder=3,
+        )
+
+    ax.set_xlim(-0.5, positions[-1] + 0.5)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(plot_groups)
     ax.set_xlabel("")
     ax.set_ylabel("Control-average structural node strength", fontsize=FONTSIZE)
     ax.tick_params(axis="both", labelsize=TICK_FONTSIZE)
-    ymax = float(df_strength_groups["control_structural_strength"].max())
+    ymax = float(np.nanmax(df_strength_groups["control_structural_strength"].to_numpy(dtype=float)))
+    ytext = ymax * 1.02 if ymax > 0 else ymax + 0.1
     ax.text(
-        0.5,
-        ymax * 1.02,
+        float(np.mean(positions)),
+        ytext,
         f"Mann-Whitney P = {p_value:.3g}\nRank-biserial = {rank_biserial:.2f}",
         ha="center",
         va="bottom",
