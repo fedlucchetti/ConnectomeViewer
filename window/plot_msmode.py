@@ -67,6 +67,54 @@ except Exception:
     from gradient_surface import GradientSurfaceDialog
 
 
+def _load_nettools_class():
+    repo_root = Path(__file__).resolve().parents[2]
+    toolbox_root = repo_root / "mrsitoolbox"
+    for path_entry in (str(repo_root), str(toolbox_root)):
+        if path_entry not in sys.path:
+            sys.path.insert(0, path_entry)
+    candidate_classes = []
+    for import_target in (
+        "mrsitoolbox.connectomics.nettools",
+        "connectomics.nettools",
+    ):
+        try:
+            module = __import__(import_target, fromlist=["NetTools"])
+            candidate = getattr(module, "NetTools", None)
+            if candidate is not None:
+                candidate_classes.append(candidate)
+        except Exception:
+            continue
+    for candidate in candidate_classes:
+        if hasattr(candidate, "metsim_triangle_scalar_values") and hasattr(candidate, "triangular_rgb_model"):
+            return candidate
+
+    local_candidates = (
+        Path(__file__).resolve().parents[2] / "mrsitoolbox" / "connectomics" / "nettools.py",
+    )
+    for module_path in local_candidates:
+        if not module_path.is_file():
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("mrsi_viewer_local_nettools", module_path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            candidate = getattr(module, "NetTools", None)
+            if candidate is not None and hasattr(candidate, "metsim_triangle_scalar_values"):
+                return candidate
+        except Exception:
+            continue
+    if candidate_classes:
+        return candidate_classes[0]
+    raise ImportError("Unable to load NetTools with triangular gradient helpers.")
+
+
+NetTools = _load_nettools_class()
+nettools = NetTools()
+
+
 def _dialog_theme_stylesheet(theme_name="Dark"):
     return _shared_dialog_theme_stylesheet(theme_name)
 
@@ -3680,66 +3728,7 @@ class GradientScatterDialog(QDialog):
 
     @staticmethod
     def _fit_triangle_vertices(x_values, y_values):
-        points = np.column_stack(
-            (
-                np.asarray(x_values, dtype=float).reshape(-1),
-                np.asarray(y_values, dtype=float).reshape(-1),
-            )
-        )
-        finite_mask = np.isfinite(points).all(axis=1)
-        points = points[finite_mask]
-        if points.shape[0] < 3:
-            return GradientScatterDialog._fallback_triangle_vertices(x_values, y_values)
-
-        unique_points = np.unique(points, axis=0)
-        if unique_points.shape[0] < 3:
-            return GradientScatterDialog._fallback_triangle_vertices(x_values, y_values)
-
-        hull_points = unique_points
-        try:
-            from scipy.spatial import ConvexHull
-
-            hull = ConvexHull(unique_points)
-            hull_points = unique_points[hull.vertices]
-        except Exception:
-            pass
-
-        candidate_points = hull_points
-        if candidate_points.shape[0] > 96:
-            step = max(1, int(np.ceil(candidate_points.shape[0] / 96.0)))
-            candidate_points = candidate_points[::step]
-            extrema = np.unique(
-                np.vstack(
-                    (
-                        hull_points[np.argmin(hull_points[:, 0])],
-                        hull_points[np.argmax(hull_points[:, 0])],
-                        hull_points[np.argmin(hull_points[:, 1])],
-                        hull_points[np.argmax(hull_points[:, 1])],
-                    )
-                ),
-                axis=0,
-            )
-            candidate_points = np.unique(np.vstack((candidate_points, extrema)), axis=0)
-
-        best_vertices = None
-        best_area = -1.0
-        for idx_a, idx_b, idx_c in combinations(range(candidate_points.shape[0]), 3):
-            a = candidate_points[idx_a]
-            b = candidate_points[idx_b]
-            c = candidate_points[idx_c]
-            area2 = GradientScatterDialog._triangle_area2(a, b, c)
-            if area2 > best_area:
-                best_area = area2
-                best_vertices = np.asarray((a, b, c), dtype=float)
-
-        if best_vertices is None or best_area <= 1e-8:
-            return GradientScatterDialog._fallback_triangle_vertices(x_values, y_values)
-
-        apex_index = int(np.argmax(best_vertices[:, 1]))
-        apex = best_vertices[apex_index]
-        base = np.delete(best_vertices, apex_index, axis=0)
-        base = base[np.argsort(base[:, 0])]
-        return np.asarray((apex, base[0], base[1]), dtype=float)
+        return np.asarray(nettools.fit_triangle_vertices(x_values, y_values), dtype=float)
 
     @staticmethod
     def _rgb_model(x_values, y_values, color_order="RBG", fit_mode="triangle"):
@@ -3748,20 +3737,25 @@ class GradientScatterDialog(QDialog):
         if mode == "square":
             outline, anchor_points = GradientScatterDialog._fit_square_outline(x_values, y_values)
             vertices = np.asarray(outline, dtype=float)
-        else:
-            vertices = GradientScatterDialog._fit_triangle_vertices(x_values, y_values)
-            anchor_points = np.asarray(vertices, dtype=float)
-        rgb_basis = {
-            "R": np.array((1.0, 0.0, 0.0), dtype=float),
-            "G": np.array((0.0, 1.0, 0.0), dtype=float),
-            "B": np.array((0.0, 0.0, 1.0), dtype=float),
-        }
-        vertex_colors = np.asarray([rgb_basis[channel] for channel in order], dtype=float)
+            rgb_basis = {
+                "R": np.array((1.0, 0.0, 0.0), dtype=float),
+                "G": np.array((0.0, 1.0, 0.0), dtype=float),
+                "B": np.array((0.0, 0.0, 1.0), dtype=float),
+            }
+            vertex_colors = np.asarray([rgb_basis[channel] for channel in order], dtype=float)
+            return {
+                "vertices": np.asarray(vertices, dtype=float),
+                "anchor_points": np.asarray(anchor_points, dtype=float),
+                "vertex_colors": vertex_colors,
+                "order": order,
+                "fit_mode": mode,
+            }
+        triangle_model = nettools.triangular_rgb_model(x_values, y_values, color_order=order)
         return {
-            "vertices": np.asarray(vertices, dtype=float),
-            "anchor_points": np.asarray(anchor_points, dtype=float),
-            "vertex_colors": vertex_colors,
-            "order": order,
+            "vertices": np.asarray(triangle_model["vertices"], dtype=float),
+            "anchor_points": np.asarray(triangle_model["anchor_points"], dtype=float),
+            "vertex_colors": np.asarray(triangle_model["vertex_colors"], dtype=float),
+            "order": str(triangle_model.get("order", order)),
             "fit_mode": mode,
         }
 
@@ -3785,6 +3779,8 @@ class GradientScatterDialog(QDialog):
             return colors
 
         fit_mode = GradientScatterDialog._normalize_rgb_fit_mode(model.get("fit_mode", "triangle"))
+        if fit_mode != "square":
+            return np.asarray(nettools.triangular_rgb_colors_from_model(x_values, y_values, model), dtype=float)
         vertex_colors = np.asarray(model["vertex_colors"], dtype=float)
         if fit_mode == "square":
             anchor_points = np.asarray(model["anchor_points"], dtype=float)
@@ -3802,39 +3798,6 @@ class GradientScatterDialog(QDialog):
             colors[finite_mask] = GradientScatterDialog._normalize_rgb_chroma(weights @ vertex_colors)
             return np.clip(colors, 0.0, 1.0)
 
-        vertices = np.asarray(model["vertices"], dtype=float)
-        v0, v1, v2 = vertices
-        denom = (v1[1] - v2[1]) * (v0[0] - v2[0]) + (v2[0] - v1[0]) * (v0[1] - v2[1])
-        if np.isclose(denom, 0.0):
-            fallback = GradientScatterDialog._rgb_model(
-                x_valid[finite_mask],
-                y_valid[finite_mask],
-                model.get("order", "RBG"),
-                fit_mode="triangle",
-            )
-            vertices = np.asarray(fallback["vertices"], dtype=float)
-            vertex_colors = np.asarray(fallback["vertex_colors"], dtype=float)
-            v0, v1, v2 = vertices
-            denom = (v1[1] - v2[1]) * (v0[0] - v2[0]) + (v2[0] - v1[0]) * (v0[1] - v2[1])
-            if np.isclose(denom, 0.0):
-                return colors
-
-        points = np.column_stack((x_valid[finite_mask], y_valid[finite_mask]))
-        w0 = (
-            (v1[1] - v2[1]) * (points[:, 0] - v2[0])
-            + (v2[0] - v1[0]) * (points[:, 1] - v2[1])
-        ) / denom
-        w1 = (
-            (v2[1] - v0[1]) * (points[:, 0] - v2[0])
-            + (v0[0] - v2[0]) * (points[:, 1] - v2[1])
-        ) / denom
-        w2 = 1.0 - w0 - w1
-        weights = np.column_stack((w0, w1, w2))
-        weights = np.clip(weights, 0.0, 1.0)
-        weight_sum = weights.sum(axis=1, keepdims=True)
-        weight_sum[weight_sum <= 0] = 1.0
-        weights /= weight_sum
-        colors[finite_mask] = GradientScatterDialog._normalize_rgb_chroma(weights @ vertex_colors)
         return np.clip(colors, 0.0, 1.0)
 
     @staticmethod
