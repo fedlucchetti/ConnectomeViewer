@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -1275,6 +1276,80 @@ def _compute_edge_class_enrichment(
     return edge_class_df, enrichment_df
 
 
+def _compute_richclub_stats_compat(
+    nba,
+    adj: np.ndarray,
+    density: float,
+    num_random: int,
+    alpha: float,
+    n_jobs: int,
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    method = nba.compute_richclub_stats
+    try:
+        param_names = set(inspect.signature(method).parameters.keys())
+    except Exception:
+        param_names = set()
+
+    kwargs = {}
+    for name, value in (
+        ("num_random", int(num_random)),
+        ("alpha", float(alpha)),
+        ("null_model", "random"),
+        ("edge_density", float(density)),
+        ("n_jobs", int(n_jobs)),
+    ):
+        if (not param_names) or (name in param_names):
+            kwargs[name] = value
+
+    result = method(adj, **kwargs)
+    if not isinstance(result, tuple):
+        raise TypeError(
+            "NetBasedAnalysis.compute_richclub_stats returned an unsupported non-tuple result."
+        )
+
+    if len(result) == 3:
+        degrees, rc_coefficients, rand_params = result
+        if not isinstance(rand_params, dict):
+            raise TypeError(
+                "NetBasedAnalysis.compute_richclub_stats returned three values, but the third is not a dict."
+            )
+        return (
+            np.asarray(degrees, dtype=int),
+            np.asarray(rc_coefficients, dtype=float),
+            {
+                "null_dist": np.asarray(rand_params.get("null_dist", []), dtype=float),
+                "median": np.asarray(rand_params.get("median", []), dtype=float),
+                "lower": np.asarray(rand_params.get("lower", []), dtype=float),
+                "upper": np.asarray(rand_params.get("upper", []), dtype=float),
+                "pvalue": np.asarray(rand_params.get("pvalue", []), dtype=float),
+            },
+        )
+
+    if len(result) == 5:
+        degrees, rc_coefficients, mean_random_rc, std_random_rc, p_values = result
+        degrees_arr = np.asarray(degrees, dtype=int)
+        rc_arr = np.asarray(rc_coefficients, dtype=float)
+        mean_arr = np.asarray(mean_random_rc, dtype=float)
+        std_arr = np.asarray(std_random_rc, dtype=float)
+        pval_arr = np.asarray(p_values, dtype=float)
+        return (
+            degrees_arr,
+            rc_arr,
+            {
+                "null_dist": np.empty((len(degrees_arr), 0), dtype=float),
+                "median": mean_arr,
+                "lower": mean_arr - std_arr,
+                "upper": mean_arr + std_arr,
+                "pvalue": pval_arr,
+            },
+        )
+
+    raise TypeError(
+        "NetBasedAnalysis.compute_richclub_stats returned an unsupported number of values: "
+        f"{len(result)}"
+    )
+
+
 def compute_control_richclub_curve(
     control_average_matrix: np.ndarray,
     density: float,
@@ -1296,21 +1371,19 @@ def compute_control_richclub_curve(
     adj = np.maximum(adj, adj.T)
     np.fill_diagonal(adj, 0)
 
-    degrees, rc_coefficients, rand_params = nba.compute_richclub_stats(
-        adj,
+    degrees, rc_coefficients, rand_params = _compute_richclub_stats_compat(
+        nba=nba,
+        adj=adj,
+        density=density,
         num_random=int(num_random),
         alpha=float(alpha),
-        null_model="random",
-        edge_density=density,
         n_jobs=int(n_jobs),
     )
-    degrees = np.asarray(degrees, dtype=int)
-    rc_coefficients = np.asarray(rc_coefficients, dtype=float)
+    node_degree = np.asarray(nba.get_degree_per_node(adj), dtype=int)
     median_rand_rc = np.asarray(rand_params.get("median", []), dtype=float)
     lower_rand_rc = np.asarray(rand_params.get("lower", []), dtype=float)
     upper_rand_rc = np.asarray(rand_params.get("upper", []), dtype=float)
     p_values = np.asarray(rand_params.get("pvalue", []), dtype=float)
-    node_degree = np.asarray(nba.get_degree_per_node(adj), dtype=int)
 
     n_possible_edges = adj.shape[0] * max(adj.shape[0] - 1, 0) / 2.0
     actual_density = float(np.triu(adj, k=1).sum() / n_possible_edges) if n_possible_edges > 0 else np.nan
