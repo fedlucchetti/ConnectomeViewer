@@ -254,6 +254,7 @@ class NBSPrepareDialog(QDialog):
         output_dir_default="",
         atlas_dir_default="",
         bids_dir_default="",
+        workspace_reference_options=None,
         theme_name="Dark",
         parent=None,
     ):
@@ -293,6 +294,8 @@ class NBSPrepareDialog(QDialog):
         self._results_output_tail = []
         self._results_output_dir_auto_value = ""
         self._last_results_output_dir = None
+        self._workspace_reference_options = self._normalize_workspace_reference_options(workspace_reference_options)
+        self._reference_workspace_combo_syncing = False
         self._run_cancel_requested = False
         self._current_step = 0
         self._model_updating = False
@@ -393,6 +396,88 @@ class NBSPrepareDialog(QDialog):
             if path.exists():
                 return str(path)
         return str(Path.cwd())
+
+    def _normalize_workspace_reference_options(self, options) -> list[dict[str, str]]:
+        normalized = []
+        seen_paths = set()
+        for option in options or []:
+            if not isinstance(option, dict):
+                continue
+            path_text = str(option.get("path") or "").strip()
+            if not path_text:
+                continue
+            try:
+                path_obj = Path(path_text).expanduser()
+            except Exception:
+                continue
+            if not path_obj.is_file():
+                continue
+            try:
+                path_key = str(path_obj.resolve())
+            except Exception:
+                path_key = str(path_obj)
+            if path_key in seen_paths:
+                continue
+            label = str(option.get("label") or path_obj.name).strip() or path_obj.name
+            normalized.append({"label": label, "path": str(path_obj)})
+            seen_paths.add(path_key)
+        normalized.sort(key=lambda item: item["label"].lower())
+        return normalized
+
+    def set_workspace_reference_options(self, options) -> None:
+        current_path = self.reference_matrix_edit.text().strip() if hasattr(self, "reference_matrix_edit") else ""
+        self._workspace_reference_options = self._normalize_workspace_reference_options(options)
+        if not hasattr(self, "reference_workspace_combo"):
+            return
+        self._reference_workspace_combo_syncing = True
+        self.reference_workspace_combo.blockSignals(True)
+        self.reference_workspace_combo.clear()
+        if self._workspace_reference_options:
+            self.reference_workspace_combo.addItem("Manual / browse...", "")
+            for option in self._workspace_reference_options:
+                self.reference_workspace_combo.addItem(str(option["label"]), str(option["path"]))
+            self.reference_workspace_combo.setEnabled(not self._results_is_running())
+        else:
+            self.reference_workspace_combo.addItem("No workspace NPZ files available", "")
+            self.reference_workspace_combo.setEnabled(False)
+        self.reference_workspace_combo.blockSignals(False)
+        self._reference_workspace_combo_syncing = False
+        self._sync_reference_workspace_combo(current_path)
+
+    def _sync_reference_workspace_combo(self, reference_path: str | None = None) -> None:
+        if not hasattr(self, "reference_workspace_combo"):
+            return
+        if self._reference_workspace_combo_syncing:
+            return
+        reference_text = str(reference_path or "").strip()
+        try:
+            resolved_reference = str(Path(reference_text).expanduser().resolve()) if reference_text else ""
+        except Exception:
+            resolved_reference = reference_text
+        target_index = 0
+        for idx, option in enumerate(self._workspace_reference_options, start=1):
+            try:
+                option_key = str(Path(option["path"]).expanduser().resolve())
+            except Exception:
+                option_key = str(option["path"])
+            if resolved_reference and option_key == resolved_reference:
+                target_index = idx
+                break
+        self._reference_workspace_combo_syncing = True
+        self.reference_workspace_combo.setCurrentIndex(target_index)
+        self._reference_workspace_combo_syncing = False
+
+    def _on_reference_matrix_path_changed(self, text) -> None:
+        self._sync_reference_workspace_combo(text)
+        self._update_run_state()
+
+    def _on_reference_workspace_changed(self, _index) -> None:
+        if self._reference_workspace_combo_syncing or not hasattr(self, "reference_workspace_combo"):
+            return
+        selected_path = str(self.reference_workspace_combo.currentData() or "").strip()
+        if not selected_path:
+            return
+        self.reference_matrix_edit.setText(selected_path)
 
     def _is_results_output_dir_auto_managed(self) -> bool:
         if not hasattr(self, "results_output_dir_edit"):
@@ -767,34 +852,41 @@ class NBSPrepareDialog(QDialog):
         self.results_input_nbs_edit.setPlaceholderText("Available after a successful NBS run")
         info_grid.addWidget(self.results_input_nbs_edit, 0, 1, 1, 3)
 
-        info_grid.addWidget(QLabel("Reference matrix"), 1, 0)
+        info_grid.addWidget(QLabel("Workspace reference"), 1, 0)
+        self.reference_workspace_combo = QComboBox()
+        self.reference_workspace_combo.currentIndexChanged.connect(self._on_reference_workspace_changed)
+        self.set_workspace_reference_options(self._workspace_reference_options)
+        info_grid.addWidget(self.reference_workspace_combo, 1, 1, 1, 3)
+
+        info_grid.addWidget(QLabel("Reference matrix"), 2, 0)
         self.reference_matrix_edit = QLineEdit("")
         self.reference_matrix_edit.setPlaceholderText("Select structural reference NPZ")
-        self.reference_matrix_edit.textChanged.connect(self._update_run_state)
-        info_grid.addWidget(self.reference_matrix_edit, 1, 1, 1, 2)
+        self.reference_matrix_edit.textChanged.connect(self._on_reference_matrix_path_changed)
+        info_grid.addWidget(self.reference_matrix_edit, 2, 1, 1, 2)
         self.reference_matrix_button = QPushButton("Browse")
         self.reference_matrix_button.clicked.connect(self._browse_reference_matrix)
-        info_grid.addWidget(self.reference_matrix_button, 1, 3)
+        info_grid.addWidget(self.reference_matrix_button, 2, 3)
 
-        info_grid.addWidget(QLabel("Output folder"), 2, 0)
+        info_grid.addWidget(QLabel("Output folder"), 3, 0)
         initial_results_output = self._default_results_output_dir()
         self._results_output_dir_auto_value = initial_results_output
         self.results_output_dir_edit = QLineEdit(initial_results_output)
         self.results_output_dir_edit.textChanged.connect(self._update_run_state)
-        info_grid.addWidget(self.results_output_dir_edit, 2, 1, 1, 2)
+        info_grid.addWidget(self.results_output_dir_edit, 3, 1, 1, 2)
         self.results_output_dir_button = QPushButton("Browse")
         self.results_output_dir_button.clicked.connect(self._browse_results_output_dir)
-        info_grid.addWidget(self.results_output_dir_button, 2, 3)
+        info_grid.addWidget(self.results_output_dir_button, 3, 3)
 
         self.results_status_label = QLabel("Run NBS first to enable this step.")
         self.results_status_label.setWordWrap(True)
-        info_grid.addWidget(self.results_status_label, 3, 0, 1, 4)
+        info_grid.addWidget(self.results_status_label, 4, 0, 1, 4)
 
         self.results_run_button = QPushButton("Generate Structural Context")
         self.results_run_button.clicked.connect(self._run_results_analysis)
         self.results_run_button.setEnabled(False)
-        info_grid.addWidget(self.results_run_button, 4, 0, 1, 4)
+        info_grid.addWidget(self.results_run_button, 5, 0, 1, 4)
 
+        self._sync_reference_workspace_combo(self.reference_matrix_edit.text())
         layout.addWidget(info_group)
         layout.addStretch(1)
         return page
@@ -823,7 +915,7 @@ class NBSPrepareDialog(QDialog):
         if hasattr(self, "results_status_label"):
             if result_path and Path(result_path).is_file():
                 self.results_status_label.setText(
-                    "Use the generated NBS components_all bundle as input and select a structural reference matrix."
+                    "Use the generated NBS components_all bundle as input and select a structural reference matrix from the workspace or via file browse."
                 )
             else:
                 self.results_status_label.setText("Run NBS first to enable this step.")
@@ -834,6 +926,8 @@ class NBSPrepareDialog(QDialog):
             self.results_run_button.setText("Running..." if busy else "Generate Structural Context")
         if hasattr(self, "reference_matrix_button"):
             self.reference_matrix_button.setEnabled(not busy)
+        if hasattr(self, "reference_workspace_combo"):
+            self.reference_workspace_combo.setEnabled((not busy) and bool(self._workspace_reference_options))
         if hasattr(self, "results_output_dir_button"):
             self.results_output_dir_button.setEnabled(not busy)
         if hasattr(self, "reference_matrix_edit"):

@@ -66,6 +66,35 @@ class PrepareDialogController:
     def current_harmonize_source(self):
         return self.current_stack_source()
 
+    def _workspace_reference_options(self):
+        viewer = self._viewer
+        options = []
+        seen_paths = set()
+        for entry_id in viewer._entry_ids():
+            entry = viewer._entries.get(entry_id)
+            if not isinstance(entry, dict) or entry.get("kind") != "file":
+                continue
+            path_raw = entry.get("path")
+            if not path_raw:
+                continue
+            path = Path(path_raw)
+            if not path.is_file() or path.suffix.lower() != ".npz":
+                continue
+            try:
+                normalized = str(path.resolve())
+            except Exception:
+                normalized = str(path)
+            if normalized in seen_paths:
+                continue
+            label = str(entry.get("label") or path.name).strip() or path.name
+            key = str(entry.get("selected_key") or "").strip()
+            if key and key not in label:
+                label = f"{label} [{key}]"
+            options.append({"id": str(entry_id), "label": label, "path": str(path)})
+            seen_paths.add(normalized)
+        options.sort(key=lambda item: item["label"].lower())
+        return options
+
     def _validated_source_context(self, source, *, empty_message: str):
         viewer = self._viewer
         if source is None:
@@ -91,6 +120,12 @@ class PrepareDialogController:
     def update_nbs_prepare_button(self) -> None:
         viewer = self._viewer
         enabled = self.current_nbs_source() is not None
+        dialog = getattr(viewer, "_nbs_dialog", None)
+        if dialog is not None and hasattr(dialog, "set_workspace_reference_options"):
+            try:
+                dialog.set_workspace_reference_options(self._workspace_reference_options())
+            except Exception:
+                pass
         if not hasattr(viewer, "nbs_prepare_button"):
             if hasattr(viewer, "nbs_prepare_action"):
                 viewer.nbs_prepare_action.setEnabled(enabled)
@@ -170,6 +205,7 @@ class PrepareDialogController:
             output_dir_default=viewer._results_dir_default,
             atlas_dir_default=viewer._atlas_dir_default,
             bids_dir_default=viewer._bids_dir_default,
+            workspace_reference_options=self._workspace_reference_options(),
             theme_name=viewer._theme_name,
             parent=viewer,
         )
