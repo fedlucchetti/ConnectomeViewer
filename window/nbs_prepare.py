@@ -326,13 +326,53 @@ class NBSPrepareDialog(QDialog):
         atlas_string = _slugify_fragment(self._source_atlas_string or "unknown")
         return str(self._default_results_root() / "nbs" / group / modality / atlas_string)
 
+    def _results_threshold_token(self, result_path: Path | None = None) -> str | None:
+        candidate_path = None
+        if result_path is not None:
+            candidate_path = Path(result_path).expanduser()
+        else:
+            raw_path = str(self._last_result_npz_path or "").strip()
+            if raw_path:
+                candidate_path = Path(raw_path).expanduser()
+        if candidate_path is not None:
+            match = re.search(r"_th-([^_]+)", candidate_path.name)
+            if match:
+                token = match.group(1).strip()
+                if token:
+                    return token
+            try:
+                with np.load(candidate_path, allow_pickle=True) as npz:
+                    if "t_thresh" in npz:
+                        value = np.asarray(npz["t_thresh"]).reshape(-1)[0]
+                        return f"{float(value):g}"
+            except Exception:
+                pass
+        payload = dict(self._last_run_payload or {})
+        if "t_thresh" in payload:
+            try:
+                return f"{float(payload['t_thresh']):g}"
+            except Exception:
+                pass
+        return None
+
     def _default_results_output_dir(self) -> str:
-        base_dir = self._default_results_root() / "nbs"
+        result_path_text = str(self._last_result_npz_path or "").strip()
+        if result_path_text:
+            result_path = Path(result_path_text).expanduser()
+            base_dir = result_path.parent
+        else:
+            result_path = None
+            base_dir = self._default_results_root()
+        threshold_token = self._results_threshold_token(result_path)
+        folder_name = "nbs_control_structural_context"
+        if threshold_token:
+            folder_name = f"{folder_name}_th-{threshold_token}"
+        output_dir = base_dir / folder_name
         try:
-            base_dir.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-        return str(base_dir)
+        return str(output_dir)
 
     def _default_reference_matrix_dir(self) -> str:
         candidates = [
