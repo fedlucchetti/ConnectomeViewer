@@ -237,7 +237,9 @@ class NBSPrepareDialog(QDialog):
     REGRESSOR_TYPE_MODEL_OPTIONS = ("Auto", "Categorical", "Continuous")
     MODALITY_OPTIONS = ("fmri", "mrsi", "dwi", "anat", "morph", "pet", "other")
     TEST_OPTIONS = ("t-test", "Ftest")
-    STEP_TITLES = ("Data", "Model", "NBS Settings", "Run")
+    STEP_TITLES = ("Data", "Model", "NBS Settings", "Run", "Results")
+    RUN_STEP_INDEX = 3
+    RESULTS_STEP_INDEX = 4
     NUMERIC_RANGE_RE = re.compile(
         r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*-\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$"
     )
@@ -287,6 +289,10 @@ class NBSPrepareDialog(QDialog):
         self._last_run_payload = None
         self._run_process = None
         self._run_output_tail = []
+        self._results_process = None
+        self._results_output_tail = []
+        self._results_output_dir_auto_value = ""
+        self._last_results_output_dir = None
         self._run_cancel_requested = False
         self._current_step = 0
         self._model_updating = False
@@ -320,6 +326,50 @@ class NBSPrepareDialog(QDialog):
         atlas_string = _slugify_fragment(self._source_atlas_string or "unknown")
         return str(self._default_results_root() / "nbs" / group / modality / atlas_string)
 
+    def _default_results_output_dir(self) -> str:
+        base_dir = self._default_results_root() / "nbs"
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return str(base_dir)
+
+    def _default_reference_matrix_dir(self) -> str:
+        candidates = [
+            str(self._bids_dir_default or "").strip(),
+            str(self._atlas_dir_default or "").strip(),
+            str(self._default_results_root()),
+            str(self._source_path.parent),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                path = Path(candidate).expanduser()
+            except Exception:
+                continue
+            if path.is_file():
+                return str(path.parent)
+            if path.exists():
+                return str(path)
+        return str(Path.cwd())
+
+    def _is_results_output_dir_auto_managed(self) -> bool:
+        if not hasattr(self, "results_output_dir_edit"):
+            return False
+        current = self.results_output_dir_edit.text().strip()
+        auto_value = str(self._results_output_dir_auto_value or "").strip()
+        return (not current) or (auto_value and current == auto_value)
+
+    def _refresh_default_results_output_dir(self, force=False) -> None:
+        if not hasattr(self, "results_output_dir_edit"):
+            return
+        if not force and not self._is_results_output_dir_auto_managed():
+            return
+        default_output = self._default_results_output_dir()
+        self.results_output_dir_edit.setText(default_output)
+        self._results_output_dir_auto_value = default_output
+
     def _is_output_dir_auto_managed(self) -> bool:
         if not hasattr(self, "output_dir_edit"):
             return False
@@ -347,6 +397,7 @@ class NBSPrepareDialog(QDialog):
         self.workflow_shell.add_step(self._build_step_model())
         self.workflow_shell.add_step(self._build_step_nbs_settings())
         self.workflow_shell.add_step(self._build_step_run())
+        self.workflow_shell.add_step(self._build_step_results())
 
         self.log_toggle_button = QPushButton("Show log ▾")
         self.log_toggle_button.clicked.connect(self._toggle_log_drawer)
@@ -384,7 +435,7 @@ class NBSPrepareDialog(QDialog):
         self.next_button = QPushButton("Next")
         self.next_button.clicked.connect(self._go_next_step)
         actions.addWidget(self.next_button)
-        self.run_button = QPushButton("Run")
+        self.run_button = QPushButton("Run NBS")
         self.run_button.setMinimumWidth(130)
         self.run_button.clicked.connect(self._run_configuration)
         actions.addWidget(self.run_button)
@@ -393,6 +444,8 @@ class NBSPrepareDialog(QDialog):
         actions.addWidget(close_button)
         root_layout.addLayout(actions)
 
+        if len(self._step_buttons) > self.RESULTS_STEP_INDEX:
+            self._step_buttons[self.RESULTS_STEP_INDEX].setEnabled(False)
         self._go_to_step(0)
         self._update_dataset_summary()
 
@@ -661,14 +714,130 @@ class NBSPrepareDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_step_results(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        info_group = QGroupBox("Structural context results")
+        info_grid = QGridLayout(info_group)
+
+        info_grid.addWidget(QLabel("NBS result bundle"), 0, 0)
+        self.results_input_nbs_edit = QLineEdit("")
+        self.results_input_nbs_edit.setReadOnly(True)
+        self.results_input_nbs_edit.setPlaceholderText("Available after a successful NBS run")
+        info_grid.addWidget(self.results_input_nbs_edit, 0, 1, 1, 3)
+
+        info_grid.addWidget(QLabel("Reference matrix"), 1, 0)
+        self.reference_matrix_edit = QLineEdit("")
+        self.reference_matrix_edit.setPlaceholderText("Select structural reference NPZ")
+        self.reference_matrix_edit.textChanged.connect(self._update_run_state)
+        info_grid.addWidget(self.reference_matrix_edit, 1, 1, 1, 2)
+        self.reference_matrix_button = QPushButton("Browse")
+        self.reference_matrix_button.clicked.connect(self._browse_reference_matrix)
+        info_grid.addWidget(self.reference_matrix_button, 1, 3)
+
+        info_grid.addWidget(QLabel("Output folder"), 2, 0)
+        initial_results_output = self._default_results_output_dir()
+        self._results_output_dir_auto_value = initial_results_output
+        self.results_output_dir_edit = QLineEdit(initial_results_output)
+        self.results_output_dir_edit.textChanged.connect(self._update_run_state)
+        info_grid.addWidget(self.results_output_dir_edit, 2, 1, 1, 2)
+        self.results_output_dir_button = QPushButton("Browse")
+        self.results_output_dir_button.clicked.connect(self._browse_results_output_dir)
+        info_grid.addWidget(self.results_output_dir_button, 2, 3)
+
+        self.results_status_label = QLabel("Run NBS first to enable this step.")
+        self.results_status_label.setWordWrap(True)
+        info_grid.addWidget(self.results_status_label, 3, 0, 1, 4)
+
+        self.results_run_button = QPushButton("Generate Structural Context")
+        self.results_run_button.clicked.connect(self._run_results_analysis)
+        self.results_run_button.setEnabled(False)
+        info_grid.addWidget(self.results_run_button, 4, 0, 1, 4)
+
+        layout.addWidget(info_group)
+        layout.addStretch(1)
+        return page
+
+    def _results_script_path(self):
+        wrapper = Path(__file__).resolve().parents[1] / "scripts" / "plot_nbs_control_structural_context.py"
+        if wrapper.exists():
+            return wrapper
+        fallback = Path(__file__).resolve().parents[2] / "mrsitoolbox" / "experiments" / "nbs_metsim_rc_overlap" / "plot_nbs_control_structural_context.py"
+        return fallback
+
+    def _results_is_running(self):
+        return (
+            self._results_process is not None
+            and self._results_process.state() != _qprocess_not_running()
+        )
+
+    def _results_ready(self):
+        result_path = str(self._last_result_npz_path or "").strip()
+        return bool(result_path) and Path(result_path).is_file()
+
+    def _refresh_results_step(self, force_defaults=False):
+        result_path = str(self._last_result_npz_path or "").strip()
+        if hasattr(self, "results_input_nbs_edit"):
+            self.results_input_nbs_edit.setText(result_path)
+        if hasattr(self, "results_status_label"):
+            if result_path and Path(result_path).is_file():
+                self.results_status_label.setText(
+                    "Use the generated NBS components_all bundle as input and select a structural reference matrix."
+                )
+            else:
+                self.results_status_label.setText("Run NBS first to enable this step.")
+        self._refresh_default_results_output_dir(force=force_defaults)
+
+    def _set_results_busy(self, busy):
+        if hasattr(self, "results_run_button"):
+            self.results_run_button.setText("Running..." if busy else "Generate Structural Context")
+        if hasattr(self, "reference_matrix_button"):
+            self.reference_matrix_button.setEnabled(not busy)
+        if hasattr(self, "results_output_dir_button"):
+            self.results_output_dir_button.setEnabled(not busy)
+        if hasattr(self, "reference_matrix_edit"):
+            self.reference_matrix_edit.setEnabled(not busy)
+        if hasattr(self, "results_output_dir_edit"):
+            self.results_output_dir_edit.setEnabled(not busy)
+        self._update_run_state()
+
+    def _browse_reference_matrix(self):
+        current = self.reference_matrix_edit.text().strip() if hasattr(self, "reference_matrix_edit") else ""
+        if current:
+            start_dir = str(Path(current).expanduser().parent)
+        else:
+            start_dir = self._default_reference_matrix_dir()
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select reference matrix",
+            start_dir,
+            "NPZ (*.npz);;All files (*)",
+        )
+        if selected:
+            self.reference_matrix_edit.setText(selected)
+
+    def _browse_results_output_dir(self):
+        start_dir = self.results_output_dir_edit.text().strip() if hasattr(self, "results_output_dir_edit") else ""
+        start_dir = start_dir or self._default_results_output_dir()
+        selected = QFileDialog.getExistingDirectory(self, "Select results output folder", start_dir)
+        if selected:
+            self.results_output_dir_edit.setText(selected)
+            self._results_output_dir_auto_value = ""
+
     def _go_to_step(self, step_index):
-        step = self.workflow_shell.set_current_step(step_index)
+        step = max(0, min(int(step_index), len(self.STEP_TITLES) - 1))
+        if step > 0 and step < len(self._step_buttons) and not self._step_buttons[step].isEnabled():
+            step = self._current_step if 0 <= self._current_step < len(self.STEP_TITLES) else 0
+        step = self.workflow_shell.set_current_step(step)
         self._current_step = step
-        if step == 3:
+        if step == self.RUN_STEP_INDEX:
             self._update_run_summary()
             if not self._log_expanded:
                 self._set_log_drawer_expanded(True)
                 self._log_auto_expanded = True
+        elif step == self.RESULTS_STEP_INDEX:
+            self._refresh_results_step(force_defaults=False)
         elif self._log_auto_expanded:
             self._set_log_drawer_expanded(False)
             self._log_auto_expanded = False
@@ -682,9 +851,16 @@ class NBSPrepareDialog(QDialog):
 
     def _update_step_navigation(self):
         max_step = len(self.STEP_TITLES) - 1
+        next_enabled = (
+            self._current_step < max_step
+            and (self._current_step + 1) < len(self._step_buttons)
+            and self._step_buttons[self._current_step + 1].isEnabled()
+        )
         self.back_button.setEnabled(self._current_step > 0)
         self.next_button.setVisible(self._current_step < max_step)
-        self.run_button.setVisible(self._current_step == max_step)
+        self.next_button.setEnabled(next_enabled and not (self._process_is_running() or self._export_is_running() or self._covariate_balance_is_running() or self._results_is_running()))
+        self.run_button.setVisible(self._current_step == self.RUN_STEP_INDEX)
+        self.run_button.setText("Run NBS")
         self._update_run_state()
 
     def _set_log_drawer_expanded(self, expanded):
@@ -1031,15 +1207,34 @@ class NBSPrepareDialog(QDialog):
             self._process_is_running()
             or self._export_is_running()
             or self._covariate_balance_is_running()
+            or self._results_is_running()
         )
         can_run = len(classes) >= 2 and not any_busy
         if hasattr(self, "run_button"):
-            self.run_button.setEnabled(can_run)
-        if hasattr(self, "next_button"):
-            self.next_button.setEnabled(
-                (not any_busy)
-                and (self._current_step < (len(self.STEP_TITLES) - 1))
+            self.run_button.setEnabled(can_run and self._current_step == self.RUN_STEP_INDEX)
+        result_path = str(self._last_result_npz_path or "").strip()
+        results_enabled = bool(result_path) and Path(result_path).is_file()
+        if len(getattr(self, "_step_buttons", [])) > self.RESULTS_STEP_INDEX:
+            self._step_buttons[self.RESULTS_STEP_INDEX].setEnabled(results_enabled and not any_busy)
+        if hasattr(self, "results_run_button"):
+            reference_path = self.reference_matrix_edit.text().strip() if hasattr(self, "reference_matrix_edit") else ""
+            output_dir = self.results_output_dir_edit.text().strip() if hasattr(self, "results_output_dir_edit") else ""
+            self.results_run_button.setEnabled(
+                results_enabled
+                and bool(reference_path)
+                and bool(output_dir)
+                and (not any_busy)
             )
+        next_enabled = (
+            self._current_step < (len(self.STEP_TITLES) - 1)
+            and (self._current_step + 1) < len(getattr(self, "_step_buttons", []))
+            and self._step_buttons[self._current_step + 1].isEnabled()
+        )
+        if hasattr(self, "back_button"):
+            self.back_button.setEnabled((not any_busy) and self._current_step > 0)
+        if hasattr(self, "next_button"):
+            self.next_button.setVisible(self._current_step < (len(self.STEP_TITLES) - 1))
+            self.next_button.setEnabled((not any_busy) and next_enabled)
         if hasattr(self, "covariate_balance_button"):
             selected = self.selected_covariates()
             regressor_type = self._selected_regressor_type()
@@ -1537,8 +1732,8 @@ class NBSPrepareDialog(QDialog):
         return input_path, output_dir, regressor_name, nuisance_terms
 
     def _run_covariate_balance_analysis(self):
-        if self._process_is_running():
-            self._set_status("Wait for the NBS run to finish before launching covariate balance diagnostics.")
+        if self._process_is_running() or self._results_is_running():
+            self._set_status("Wait for active processing to finish before launching covariate balance diagnostics.")
             return
         if self._export_is_running():
             self._set_status("Wait for export to finish before launching covariate balance diagnostics.")
@@ -1744,6 +1939,8 @@ class NBSPrepareDialog(QDialog):
                 self.run_progress.setRange(0, 1)
                 self.run_progress.setValue(1)
             self._set_status(message)
+            self._refresh_results_step(force_defaults=True)
+            self._update_run_state()
             if self.export_on_finish_check.isChecked() and self.export_button.isEnabled():
                 self._export_results()
         else:
@@ -1757,6 +1954,7 @@ class NBSPrepareDialog(QDialog):
                 self.run_progress.setValue(0)
         self._run_cancel_requested = False
         self._run_process = None
+        self._update_run_state()
 
     def _force_kill_run_if_needed(self, process):
         if process is None:
@@ -1843,7 +2041,7 @@ class NBSPrepareDialog(QDialog):
         self._last_result_npz_path = None
         self._last_result_was_staged = False
         self.export_button.setEnabled(False)
-        self._go_to_step(3)
+        self._go_to_step(self.RUN_STEP_INDEX)
         self._run_process = QProcess(self)
         self._run_process.readyReadStandardOutput.connect(self._on_process_output)
         self._run_process.readyReadStandardError.connect(self._on_process_output)
@@ -2015,8 +2213,8 @@ class NBSPrepareDialog(QDialog):
             return f"Could not delete {matlab_dir.name}: {exc}"
 
     def _export_results(self):
-        if self._process_is_running():
-            self._set_status("Wait for NBS run to finish before exporting.")
+        if self._process_is_running() or self._results_is_running():
+            self._set_status("Wait for active processing to finish before exporting.")
             return
         result_path = (self._last_result_npz_path or "").strip()
         if not result_path or not Path(result_path).is_file():
@@ -2073,6 +2271,100 @@ class NBSPrepareDialog(QDialog):
                 "[NBS-EXPORT] Failed to start analyze_nbs_group.py process. Check Python executable/path."
             )
             self._export_process = None
+
+    def _on_results_output(self):
+        if self._results_process is None:
+            return
+        for read_fn in (
+            self._results_process.readAllStandardOutput,
+            self._results_process.readAllStandardError,
+        ):
+            raw = bytes(read_fn()).decode("utf-8", errors="ignore")
+            if not raw.strip():
+                continue
+            for line in raw.splitlines():
+                text = line.strip()
+                if text:
+                    self._results_output_tail.append(text)
+                    self._append_terminal_line(f"[NBS-RESULTS] {text}")
+        if self._results_output_tail:
+            self._results_output_tail = self._results_output_tail[-12:]
+            self._set_status(self._results_output_tail[-1])
+
+    def _on_results_finished(self, exit_code, _exit_status):
+        self._set_results_busy(False)
+        self._append_terminal_line(f"[NBS-RESULTS] Process finished with exit code {exit_code}")
+        if exit_code == 0:
+            output_dir = str(self._last_results_output_dir or "").strip()
+            if output_dir:
+                self._set_status(f"Structural context results completed. Output: {output_dir}")
+            else:
+                self._set_status("Structural context results completed.")
+        else:
+            tail = self._results_output_tail[-1] if self._results_output_tail else "See terminal output."
+            self._set_status(f"Structural context results failed (exit {exit_code}). {tail}")
+        self._results_process = None
+        self._update_run_state()
+
+    def _run_results_analysis(self):
+        if self._process_is_running() or self._export_is_running() or self._covariate_balance_is_running():
+            self._set_status("Wait for the current NBS task to finish before generating results.")
+            return
+        if self._results_is_running():
+            self._set_status("Results generation is already running.")
+            return
+        result_path = str(self._last_result_npz_path or "").strip()
+        if not result_path or not Path(result_path).is_file():
+            self._set_status("No NBS result bundle is available yet.")
+            return
+        reference_path = self.reference_matrix_edit.text().strip() if hasattr(self, "reference_matrix_edit") else ""
+        if not reference_path or not Path(reference_path).expanduser().is_file():
+            self._set_status("Select a valid reference matrix NPZ.")
+            return
+        output_dir_text = self.results_output_dir_edit.text().strip() if hasattr(self, "results_output_dir_edit") else ""
+        if not output_dir_text:
+            self._set_status("Select an output folder for the results.")
+            return
+        output_dir = Path(output_dir_text).expanduser()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._set_status(f"Could not create results output folder: {exc}")
+            return
+        script_path = self._results_script_path()
+        if not script_path.exists():
+            self._set_status(f"Results script not found: {script_path}")
+            return
+
+        python_exe = sys.executable or "python3"
+        command = [
+            str(script_path),
+            "-i",
+            result_path,
+            "--input_struct",
+            str(Path(reference_path).expanduser()),
+            "--output_dir",
+            str(output_dir),
+        ]
+        self._results_output_tail = []
+        self._last_results_output_dir = str(output_dir)
+        self._results_process = QProcess(self)
+        self._results_process.readyReadStandardOutput.connect(self._on_results_output)
+        self._results_process.readyReadStandardError.connect(self._on_results_output)
+        self._results_process.finished.connect(self._on_results_finished)
+        self._results_process.setWorkingDirectory(str(Path(__file__).resolve().parents[1]))
+        self._results_process.setProcessEnvironment(self._build_process_environment())
+        self._append_terminal_line(f"[NBS-RESULTS] Launch command: {shlex.join([python_exe] + command)}")
+        self._set_results_busy(True)
+        self._set_status("Launching structural context results...")
+        self._results_process.start(python_exe, command)
+        if not self._results_process.waitForStarted(3000):
+            self._set_results_busy(False)
+            self._set_status("Failed to start structural context results process.")
+            self._append_terminal_line("[NBS-RESULTS] Failed to start structural context results process.")
+            self._results_process = None
+            self._update_run_state()
+            return
 
     def selected_covariates(self):
         selected_columns = []
