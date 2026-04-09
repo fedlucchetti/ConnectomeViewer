@@ -460,21 +460,80 @@ def _json_ready(value: object) -> object:
 
 
 ########## INPUT LOADERS ##########
-def load_matrix_bundle(npz_path: Path) -> MatrixBundle:
+def _candidate_matrix_keys(data: np.lib.npyio.NpzFile) -> list[str]:
+    keys = []
+    for key in data.files:
+        try:
+            arr = np.asarray(data[key])
+        except Exception:
+            continue
+        if arr.ndim == 3 and arr.shape[1] == arr.shape[2] and (str(key) == "matrix_subj_list" or arr.shape[0] == 1):
+            keys.append(str(key))
+        elif arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+            keys.append(str(key))
+    keys.sort(key=lambda item: (0 if item == "matrix_subj_list" else 1, item.lower()))
+    return keys
+
+
+def load_matrix_bundle(npz_path: Path, matrix_key: str = "matrix_subj_list") -> MatrixBundle:
     data = np.load(npz_path, allow_pickle=True)
-    matrices = np.asarray(data["matrix_subj_list"], dtype=float)
+    resolved_key = str(matrix_key or "matrix_subj_list").strip() or "matrix_subj_list"
+    if resolved_key not in data.files:
+        candidate_keys = _candidate_matrix_keys(data)
+        available_text = ", ".join(candidate_keys) if candidate_keys else ", ".join(sorted(data.files))
+        raise KeyError(
+            f"{npz_path.name} does not contain the requested matrix key '{resolved_key}'. "
+            f"Available matrix-like keys: {available_text}"
+        )
+
+    raw_matrices = np.asarray(data[resolved_key], dtype=float)
+    direct_matrix_mode = resolved_key != "matrix_subj_list"
+    if raw_matrices.ndim == 2 and raw_matrices.shape[0] == raw_matrices.shape[1]:
+        matrices = raw_matrices[None, :, :]
+        direct_matrix_mode = True
+    elif raw_matrices.ndim == 3 and raw_matrices.shape[1] == raw_matrices.shape[2]:
+        matrices = raw_matrices
+        if direct_matrix_mode:
+            if raw_matrices.shape[0] != 1:
+                raise ValueError(
+                    f"Key '{resolved_key}' in {npz_path.name} contains {raw_matrices.shape[0]} matrices. "
+                    "Custom structural keys must contain a single square matrix or use 'matrix_subj_list'."
+                )
+    else:
+        raise ValueError(
+            f"Key '{resolved_key}' in {npz_path.name} must contain a square matrix or a subject matrix stack; "
+            f"got shape {tuple(raw_matrices.shape)}."
+        )
+
     parcel_labels = np.asarray(data["parcel_labels_group"])
     parcel_names = _safe_name_array(
         data["parcel_names_group"] if "parcel_names_group" in data.files else None,
         parcel_labels,
     )
-    subject_ids = np.asarray(data["subject_id_list"]).astype(str)
-    session_ids = np.asarray(data["session_id_list"]).astype(str)
-    covars_df = _covars_to_df(data["covars"] if "covars" in data.files else None)
-    covars_df = _ensure_pair_columns(covars_df, subject_ids, session_ids)
+    if direct_matrix_mode:
+        subject_ids = np.asarray([f"direct_matrix::{resolved_key}"], dtype=str)
+        session_ids = np.asarray(["direct"], dtype=str)
+        covars_df = pd.DataFrame(
+            {
+                "participant_id": subject_ids,
+                "session_id": session_ids,
+            }
+        )
+    else:
+        subject_ids = np.asarray(data["subject_id_list"]).astype(str)
+        session_ids = np.asarray(data["session_id_list"]).astype(str)
+        if matrices.shape[0] != len(subject_ids) or matrices.shape[0] != len(session_ids):
+            raise ValueError(
+                f"Key '{resolved_key}' in {npz_path.name} has {matrices.shape[0]} matrices, but "
+                f"subject/session arrays have lengths {len(subject_ids)} and {len(session_ids)}."
+            )
+        covars_df = _covars_to_df(data["covars"] if "covars" in data.files else None)
+        covars_df = _ensure_pair_columns(covars_df, subject_ids, session_ids)
     metadata = {
         "group": _as_str(data["group"]) if "group" in data.files else "",
         "modality": _as_str(data["modality"]) if "modality" in data.files else "",
+        "matrix_key": resolved_key,
+        "matrix_mode": "direct" if direct_matrix_mode else "subject_stack",
     }
     return MatrixBundle(
         path=npz_path,
@@ -1642,6 +1701,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-i", "--input_nbs", required=True, help="Path to the NBS components_all NPZ.")
     parser.add_argument("--input_struct", default=None, help="Optional explicit path to the structural group NPZ.")
+    parser.add_argument("--input_struct_key", default="matrix_subj_list", help="Key inside the structural NPZ used to load the reference matrix.")
     parser.add_argument("--bids_dir", default=None, help="Optional BIDS root used to resolve the structural NPZ.")
     parser.add_argument("--output_dir", default=None, help="Optional output directory. Defaults next to the NBS file.")
     parser.add_argument("--component", type=int, default=None, help="Optional NBS component index. Default uses the union of significant components.")
@@ -1724,14 +1784,17 @@ def main() -> None:
     struct_path = resolve_structural_path(input_nbs, nbs_data, args.input_struct, bids_root)
     info(f"BIDS root: {bids_root if bids_root is not None else 'not found'}")
     info(f"Resolved structural path: {struct_path}")
+    info(f"Structural matrix key: {args.input_struct_key}")
 
     ########## LOAD STRUCTURAL INPUT ##########
     print_section("LOAD STRUCTURAL INPUT")
-    structural_bundle = load_matrix_bundle(struct_path)
+    structural_bundle = load_matrix_bundle(struct_path, matrix_key=args.input_struct_key)
     info(
         f"Structural matrices: {structural_bundle.matrices.shape[0]} subjects, "
         f"{structural_bundle.matrices.shape[1]} x {structural_bundle.matrices.shape[2]} nodes"
     )
+    structural_matrix_mode = str(structural_bundle.metadata.get("matrix_mode") or "subject_stack")
+    direct_matrix_mode = structural_matrix_mode == "direct"
 
     ########## ALIGN STRUCTURAL INPUT TO NBS ##########
     print_section("ALIGN STRUCTURAL INPUT TO NBS")
@@ -1750,28 +1813,48 @@ def main() -> None:
         t_matrix=t_matrix,
         strict=bool(args.strict_parcels),
     )
-    aligned_struct, struct_indices, kept_target_indices, missing_pairs = align_bundle_to_pairs(
-        structural_bundle,
-        target_pairs,
-    )
-    covars_df = covars_df.iloc[kept_target_indices].reset_index(drop=True)
     centroids_world = np.asarray([centroid_by_label[int(label)] for label in parcel_labels.tolist()], dtype=float)
     info(json.dumps(parcel_alignment_meta, indent=2))
-    if missing_pairs:
-        info(f"Matched {len(kept_target_indices)} of {len(target_pairs)} NBS subject-session pair(s).")
+
+    if direct_matrix_mode:
+        aligned_struct = structural_bundle
+        struct_indices = [0]
+        kept_target_indices = []
+        missing_pairs = []
+        control_average_matrix = _symmetrize_matrix(np.asarray(aligned_struct.matrices[0], dtype=float))
+        control_covars = pd.DataFrame(
+            {
+                "participant_id": [f"direct_matrix::{args.input_struct_key}"],
+                "session_id": ["direct"],
+            }
+        )
+        n_controls_used = 0
+        info("Using the selected structural matrix key directly; skipped subject matching and control averaging.")
+    else:
+        aligned_struct, struct_indices, kept_target_indices, missing_pairs = align_bundle_to_pairs(
+            structural_bundle,
+            target_pairs,
+        )
+        covars_df = covars_df.iloc[kept_target_indices].reset_index(drop=True)
+        if missing_pairs:
+            info(f"Matched {len(kept_target_indices)} of {len(target_pairs)} NBS subject-session pair(s).")
 
     ########## BUILD CONTROL-AVERAGE STRUCTURAL CONNECTOME ##########
     print_section("BUILD CONTROL-AVERAGE STRUCTURAL CONNECTOME")
-    control_average_matrix, control_covars = _select_control_average_structural(
-        aligned_struct=aligned_struct,
-        covars_df=covars_df,
-        control_value=int(args.control_value),
-    )
+    if direct_matrix_mode:
+        info("Selected key provides the structural matrix directly.")
+    else:
+        control_average_matrix, control_covars = _select_control_average_structural(
+            aligned_struct=aligned_struct,
+            covars_df=covars_df,
+            control_value=int(args.control_value),
+        )
+        n_controls_used = int(control_covars.shape[0])
     node_strength = _compute_node_strength(control_average_matrix)
     nbs_node_load = _compute_nbs_node_load(nbs_mask)
     nbs_node_mask = nbs_node_load > 0
     main_hub_mask = _top_percent_hub_mask(node_strength, float(args.main_hub_threshold))
-    info(f"Controls used in structural average: {control_covars.shape[0]}")
+    info(f"Controls used in structural average: {n_controls_used}")
     info(f"NBS nodes: {int(nbs_node_mask.sum())}")
 
     ########## COMPUTE CONTROL RICH-CLUB CURVE ##########
@@ -1907,6 +1990,7 @@ def main() -> None:
         control_subject_id_list=control_covars[_resolve_column(control_covars, "participant_id", "subject_id")].astype(str).to_numpy(),
         control_session_id_list=control_covars[_resolve_column(control_covars, "session_id", "session")].astype(str).to_numpy(),
         structural_input_path=str(struct_path),
+        structural_input_key=str(args.input_struct_key),
         nbs_input_path=str(input_nbs),
     )
     node_metrics_path = output_dir / "node_metrics.tsv"
@@ -1939,7 +2023,7 @@ def main() -> None:
         "richclub_density": float(args.richclub_density),
         "richclub_num_random": int(args.richclub_num_random),
         "richclub_alpha": float(args.richclub_alpha),
-        "n_controls": int(control_covars.shape[0]),
+        "n_controls": int(n_controls_used),
         "n_nbs_nodes": int(nbs_node_mask.sum()),
         "n_non_nbs_nodes": int((~nbs_node_mask).sum()),
         "n_nbs_edges": int(np.triu(nbs_mask, k=1).sum()),
@@ -1948,12 +2032,14 @@ def main() -> None:
         "nbs_summary": nbs_summary,
         "parcel_alignment": parcel_alignment_meta,
         "pair_alignment": {
+            "mode": "direct_matrix_key" if direct_matrix_mode else "matched_subject_stack",
             "n_target_pairs": int(len(target_pairs)),
             "n_matched_pairs": int(len(kept_target_indices)),
             "n_missing_pairs": int(len(missing_pairs)),
             "missing_pairs": [f"{sub}-{ses}" for sub, ses in missing_pairs],
         },
         "structural_input_path": str(struct_path),
+        "structural_input_key": str(args.input_struct_key),
         "output_dir": str(output_dir),
         "control_value": int(args.control_value),
         "hub_thresholds": [int(val) for val in args.hub_thresholds],
