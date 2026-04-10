@@ -14,8 +14,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
+VIEWER_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _configure_matplotlib_cache_dir() -> None:
+    configured = str(os.getenv("MPLCONFIGDIR") or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.append(VIEWER_ROOT / ".matplotlib-cache")
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_test"
+            probe.touch(exist_ok=True)
+            probe.unlink()
+        except Exception:
+            continue
+        os.environ["MPLCONFIGDIR"] = str(candidate)
+        return
+
+
+_configure_matplotlib_cache_dir()
 
 import matplotlib
 SHOW_FIGURES_REQUESTED = "--show_figures" in sys.argv
@@ -29,7 +50,6 @@ from scipy import stats
 
 
 ########## LOCAL HELPERS ##########
-VIEWER_ROOT = Path(__file__).resolve().parents[1]
 RICHCLUB_DENSITIES = [0.01, 0.05, 0.10, 0.20]
 
 
@@ -126,6 +146,13 @@ def _fallback_random_graph_richclub(args: tuple[np.ndarray, np.ndarray, int]) ->
     return rc_rand
 
 
+def _get_degree_per_node(adjacency_matrix: np.ndarray) -> np.ndarray:
+    adjacency = np.asarray(adjacency_matrix)
+    if adjacency.ndim != 2 or adjacency.shape[0] != adjacency.shape[1]:
+        raise ValueError("Adjacency matrix must be square.")
+    return np.asarray(np.count_nonzero(adjacency, axis=1), dtype=int)
+
+
 class _FallbackNetBasedAnalysis:
     @staticmethod
     def threshold_density(matrix: np.ndarray, density: float) -> float:
@@ -181,10 +208,7 @@ class _FallbackNetBasedAnalysis:
         return binarized
 
     def get_degree_per_node(self, adjacency_matrix: np.ndarray) -> list[int]:
-        import networkx as nx
-
-        graph = nx.from_numpy_array(np.asarray(adjacency_matrix))
-        return [degree for _, degree in graph.degree()]
+        return _get_degree_per_node(adjacency_matrix).tolist()
 
     def compute_richclub_stats(
         self,
@@ -989,6 +1013,13 @@ def _log_figure_outputs(figure_outputs: dict[str, dict[str, str]]) -> None:
             info(f"Saved figure {figure_name} ({fmt}) to {path}")
 
 
+def _infer_reference_matrix_label(struct_path: Path) -> str:
+    match = re.search(r"(?:^|_)desc-([^_]+)", struct_path.name)
+    if match:
+        return str(match.group(1))
+    return "Value"
+
+
 def _compose_subplot_panel_figure(
     figure_outputs: dict[str, dict[str, str]],
     output_stem: Path,
@@ -997,7 +1028,8 @@ def _compose_subplot_panel_figure(
     panel_specs = [
         ("A", "metabolic_nbs_subnetwork", "Metabolic NBS subnetwork", (0, slice(0, 3))),
         ("B", "control_structural_strength", "Control structural node strength", (0, slice(3, 6))),
-        ("C", "control_richclub_curve", "Control rich-club curve", (1, slice(0, 6))),
+        ("C", "control_richclub_curve", "Control rich-club curve", (1, slice(0, 4))),
+        ("", "reference_matrix", "Reference matrix", (1, slice(4, 6))),
         ("D", "strength_violin", "Structural strength in NBS vs non-NBS nodes", (2, slice(0, 2))),
         ("E", "hub_enrichment", "Hub enrichment across thresholds", (2, slice(2, 4))),
         ("F", "edge_class_enrichment", "Structural class of NBS edges", (2, slice(4, 6))),
@@ -1014,7 +1046,8 @@ def _compose_subplot_panel_figure(
                 continue
             image = plt.imread(png_path)
             ax.imshow(image)
-            ax.set_title(f"{panel_letter}. {title}", fontsize=FONTSIZE, pad=10)
+            title_text = f"{panel_letter}. {title}" if panel_letter else title
+            ax.set_title(title_text, fontsize=FONTSIZE, pad=10)
             ax.axis("off")
 
     fig = plt.figure(figsize=(24, 18))
@@ -1379,7 +1412,7 @@ def compute_control_richclub_curve(
         alpha=float(alpha),
         n_jobs=int(n_jobs),
     )
-    node_degree = np.asarray(nba.get_degree_per_node(adj), dtype=int)
+    node_degree = _get_degree_per_node(adj)
     median_rand_rc = np.asarray(rand_params.get("median", []), dtype=float)
     lower_rand_rc = np.asarray(rand_params.get("lower", []), dtype=float)
     upper_rand_rc = np.asarray(rand_params.get("upper", []), dtype=float)
@@ -1544,6 +1577,32 @@ def plot_control_richclub_curve(
     ax.set_xlim(float(np.nanmin(x)), float(np.nanmax(x)))
     ax.set_ylim(bottom=0)
     ax.legend(fontsize=TICK_FONTSIZE)
+    fig.tight_layout()
+    return _save_matplotlib_figure(fig, output_stem)
+
+
+def plot_reference_matrix(
+    reference_matrix: np.ndarray,
+    colorbar_label: str,
+    output_stem: Path,
+) -> dict[str, str]:
+    matrix = _symmetrize_matrix(reference_matrix)
+    fig, ax = plt.subplots(figsize=(6.0, 5.6))
+    image = ax.imshow(
+        matrix,
+        cmap=BRAIN_NODE_CMAP,
+        interpolation="nearest",
+        origin="lower",
+        vmin=0.0,
+        vmax=float(np.nanmax(matrix)) if np.any(np.isfinite(matrix)) else 1.0,
+    )
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel("Node index", fontsize=FONTSIZE)
+    ax.set_ylabel("Node index", fontsize=FONTSIZE)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label(str(colorbar_label), fontsize=FONTSIZE)
+    colorbar.ax.tick_params(labelsize=TICK_FONTSIZE)
     fig.tight_layout()
     return _save_matplotlib_figure(fig, output_stem)
 
@@ -2012,6 +2071,7 @@ def main() -> None:
     ########## GENERATE FIGURES ##########
     print_section("GENERATE FIGURES")
     figure_outputs = {}
+    reference_matrix_label = _infer_reference_matrix_label(struct_path)
     figure_outputs["metabolic_nbs_subnetwork"] = plot_metabolic_nbs_subnetwork(
         nbs_mask=nbs_mask,
         t_matrix=t_matrix,
@@ -2028,6 +2088,11 @@ def main() -> None:
     figure_outputs["control_richclub_curve"] = plot_control_richclub_curve(
         richclub_curve_df=control_richclub_curve_df,
         output_stem=output_dir / "figure_3_control_structural_richclub_by_k",
+    )
+    figure_outputs["reference_matrix"] = plot_reference_matrix(
+        reference_matrix=control_average_matrix,
+        colorbar_label=reference_matrix_label,
+        output_stem=output_dir / "figure_3b_reference_structural_matrix",
     )
     figure_outputs["strength_violin"] = plot_strength_violin(
         df_strength_groups=strength_group_df,

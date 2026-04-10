@@ -1,5 +1,7 @@
 .env
+.DS_Store
 __pycache__/
+.matplotlib-cache/
 bids_mrsi_viewer.py
 build/
 *.egg-info/
@@ -10,6 +12,7 @@ config/connectome_viewer.json
 results/
 viewer_popup.py
 dist/
+data/BIDS/
 data/atlas/chimera-LFIIIIFIS-3.xml
 data/atlas/chimera-LFMIHIFIF-2.xml
 data/atlas/chimera-LFMIHIFIF-3.xml

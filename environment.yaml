@@ -25,3 +25,4 @@ dependencies:
       - PyQt6-sip
       - bctpy
       - neuroCombat
+      - seaborn
